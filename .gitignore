@@ -1,0 +1,5 @@
+bang-game-server/node_modules/
+node_modules/
+**/node_modules/
+bang-game/node_modules/
+bang-game-server/node_modules/
