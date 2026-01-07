@@ -60,7 +60,6 @@ export type CardKey =
   | "stagecoach"
   | "wellsfargo"
   | "saloon"
-  | "weapon"
   // blue
   | "jail"
   | "dynamite"

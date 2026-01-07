@@ -1,19 +1,11 @@
 import React, { createContext, useContext, useMemo, useRef, useState } from "react";
+import type { LobbyPlayer, PublicPlayer, MePlayer } from "../models/player";
+import type { WeaponKey } from "../models/card";
 
 type WsStatus = "idle" | "connecting" | "open" | "closed" | "error";
-type Role = "sheriff" | "deputy" | "outlaw" | "renegade";
 
 type Phase = "main" | "waiting";
-type Pending = { kind: "bang"; attackerId: string; targetId: string } | null;
-
-/** ✅ BANG! base game weapons */
-export type WeaponKey =
-  | "colt45"
-  | "volcanic"
-  | "schofield"
-  | "remington"
-  | "rev_carabine"
-  | "winchester";
+type Pending = null | { kind: string; [k: string]: any };
 
 export const WEAPON_LABEL: Record<WeaponKey, string> = {
   colt45: "Colt .45",
@@ -33,41 +25,29 @@ export const WEAPON_RANGE: Record<WeaponKey, number> = {
   winchester: 5,
 };
 
-export type LobbyPlayer = { id: string; name: string };
-
-export type PublicPlayer = {
-  id: string;
-  name: string;
-  role: Role;
-  playcharacter: string;
-  hp: number;
-  maxHp: number;
-  isAlive: boolean;
-  equipment: any[];
-  handCount: number;
-
-  weaponKey: WeaponKey;
-};
-
-export type MePlayer = Omit<PublicPlayer, "handCount"> & { hand: any[] };
-
 type PlayerContextType = {
-  /** lobby inputs */
+  /** profile */
   name: string;
   setName: (v: string) => void;
 
   avatarUri: string;
   setAvatarUri: (v: string) => void;
 
-  /** room state */
+  /** room */
   roomCode: string;
   setRoomCode: (v: string) => void;
 
-  /** lobby state */
+  /** lobby */
   lobbyPlayers: LobbyPlayer[];
   setLobbyPlayers: React.Dispatch<React.SetStateAction<LobbyPlayer[]>>;
 
-  /** game state */
+  roomReady: boolean;
+  setRoomReady: React.Dispatch<React.SetStateAction<boolean>>;
+
+  maxPlayers: number;
+  setMaxPlayers: React.Dispatch<React.SetStateAction<number>>;
+
+  /** game */
   players: PublicPlayer[];
   setPlayers: React.Dispatch<React.SetStateAction<PublicPlayer[]>>;
 
@@ -78,28 +58,36 @@ type PlayerContextType = {
   setTurnPlayerId: React.Dispatch<React.SetStateAction<string | null>>;
 
   phase: Phase;
-  pending: Pending;
-  turnEndsAt: number | null;
-  pendingEndsAt: number | null;
+  setPhase: React.Dispatch<React.SetStateAction<Phase>>;
 
+  pending: Pending;
+  setPending: React.Dispatch<React.SetStateAction<Pending>>;
+
+  turnEndsAt: number | null;
+  setTurnEndsAt: React.Dispatch<React.SetStateAction<number | null>>;
+
+  pendingEndsAt: number | null;
+  setPendingEndsAt: React.Dispatch<React.SetStateAction<number | null>>;
+
+  /** errors */
   lastError: string | null;
   clearError: () => void;
 
-  /** WebSocket shared */
+  /** websocket */
   ws: WebSocket | null;
   wsStatus: WsStatus;
   connectWS: (url: string) => void;
   sendWS: (obj: any) => void;
   closeWS: () => void;
+
+  /** optional helpers */
+  resetAll: () => void;
 };
 
 const PlayerContext = createContext<PlayerContextType | null>(null);
 
-/** helpers */
-function extractKey(x: any): string {
-  if (!x) return "";
-  if (typeof x === "string") return x;
-  return String(x.key ?? x.cardKey ?? x.id ?? x.name ?? "");
+function normCode(x: any): string {
+  return String(x ?? "").trim().toUpperCase();
 }
 
 function normalizeWeaponKey(raw: string): WeaponKey | null {
@@ -113,54 +101,70 @@ function normalizeWeaponKey(raw: string): WeaponKey | null {
   return null;
 }
 
-function weaponFromEquipment(equipment: any[]): WeaponKey {
-  if (!Array.isArray(equipment)) return "colt45";
-  for (const it of equipment) {
-    const k = normalizeWeaponKey(extractKey(it));
-    if (k) return k;
-  }
-  return "colt45";
+/** ✅ أهم تعديل: استخراج السلاح من كرت weapon نفسه (weaponKey/weaponName/...) */
+function weaponKeyFromAnyWeaponCard(x: any): WeaponKey | null {
+  if (!x) return null;
+
+  // server weapon card usually: { key:"weapon", weaponKey:"winchester", range:5, ... }
+  const raw =
+    String(x.weaponKey ?? x.weaponName ?? x.name ?? x.id ?? "").trim();
+
+  if (!raw) return null;
+  return normalizeWeaponKey(raw);
 }
 
-function normCode(x: any): string {
-  return String(x ?? "").trim().toUpperCase();
+/** ✅ السلاح الحقيقي = من table.weapon إذا موجود، وإلا من equipment */
+function weaponFromTableOrEquipment(table: any, equipment: any[]): WeaponKey {
+  const fromTable = weaponKeyFromAnyWeaponCard(table?.weapon);
+  if (fromTable) return fromTable;
+
+  if (Array.isArray(equipment)) {
+    const weaponCard = equipment.find((it: any) => String(it?.key) === "weapon");
+    const fromEq = weaponKeyFromAnyWeaponCard(weaponCard);
+    if (fromEq) return fromEq;
+  }
+
+  return "colt45";
 }
 
 function parseLobbyPlayers(arr: any): LobbyPlayer[] {
   if (!Array.isArray(arr)) return [];
   return arr
-    .map((p: any) => ({
-      id: String(p?.id ?? ""),
-      name: String(p?.name ?? ""),
-    }))
+    .map((p: any) => ({ id: String(p?.id ?? ""), name: String(p?.name ?? "") }))
     .filter((p: LobbyPlayer) => p.id && p.name);
 }
 
 function parsePublicPlayers(arr: any): PublicPlayer[] {
   if (!Array.isArray(arr)) return [];
-  return arr.map((p: any) => ({
-    ...p,
-    id: String(p?.id ?? ""),
-    name: String(p?.name ?? ""),
-    weaponKey: (p?.weaponKey as WeaponKey) ?? weaponFromEquipment(p?.equipment),
-  }));
+  return arr.map((p: any) => {
+    const equipment = Array.isArray(p?.equipment) ? p.equipment : [];
+    const table = p?.table ?? null;
+
+    return {
+      ...p,
+      id: String(p?.id ?? ""),
+      name: String(p?.name ?? ""),
+      equipment,
+      handCount: Number(p?.handCount ?? 0),
+      weaponKey: (p?.weaponKey as WeaponKey) ?? weaponFromTableOrEquipment(table, equipment),
+    };
+  });
 }
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
-  /** lobby inputs */
   const [name, setName] = useState("");
   const [avatarUri, setAvatarUri] = useState("");
 
-  /** room */
   const [roomCode, setRoomCode] = useState("");
 
-  /** lobby + game */
   const [lobbyPlayers, setLobbyPlayers] = useState<LobbyPlayer[]>([]);
+  const [roomReady, setRoomReady] = useState(false);
+  const [maxPlayers, setMaxPlayers] = useState(7);
+
   const [players, setPlayers] = useState<PublicPlayer[]>([]);
   const [me, setMe] = useState<MePlayer | null>(null);
   const [turnPlayerId, setTurnPlayerId] = useState<string | null>(null);
 
-  /** ✅ extra runtime */
   const [phase, setPhase] = useState<Phase>("main");
   const [pending, setPending] = useState<Pending>(null);
   const [turnEndsAt, setTurnEndsAt] = useState<number | null>(null);
@@ -169,10 +173,27 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [lastError, setLastError] = useState<string | null>(null);
   const clearError = () => setLastError(null);
 
-  /** ws */
   const wsRef = useRef<WebSocket | null>(null);
   const [wsStatus, setWsStatus] = useState<WsStatus>("idle");
   const [, force] = useState(0);
+
+  const resetAll = () => {
+    setRoomCode("");
+    setLobbyPlayers([]);
+    setRoomReady(false);
+    setMaxPlayers(7);
+
+    setPlayers([]);
+    setMe(null);
+    setTurnPlayerId(null);
+
+    setPhase("main");
+    setPending(null);
+    setTurnEndsAt(null);
+    setPendingEndsAt(null);
+
+    setLastError(null);
+  };
 
   const connectWS = (url: string) => {
     const cur = wsRef.current;
@@ -206,6 +227,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         const code = normCode(msg.roomCode);
         if (code) setRoomCode(code);
         if (msg.players) setLobbyPlayers(parseLobbyPlayers(msg.players));
+        if (typeof msg.maxPlayers === "number") setMaxPlayers(msg.maxPlayers);
+        if (typeof msg.ready === "boolean") setRoomReady(msg.ready);
         return;
       }
 
@@ -213,10 +236,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         const code = normCode(msg.roomCode);
         if (code) setRoomCode(code);
         setLobbyPlayers(parseLobbyPlayers(msg.players));
+        setRoomReady(Boolean(msg.ready));
+        if (typeof msg.maxPlayers === "number") setMaxPlayers(msg.maxPlayers);
         return;
       }
 
-      if (msg.type === "started") {
+      /** ✅ السيرفر ممكن يبعث started أو game_started */
+      if (msg.type === "started" || msg.type === "game_started") {
         const code = normCode(msg.roomCode);
         if (code) setRoomCode(code);
         return;
@@ -227,6 +253,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         if (code) setRoomCode(code);
         if (typeof msg.turnPlayerId === "string") setTurnPlayerId(msg.turnPlayerId);
         if (typeof msg.turnEndsAt === "number") setTurnEndsAt(msg.turnEndsAt);
+
+        setPhase("main");
+        setPending(null);
+        setPendingEndsAt(null);
         return;
       }
 
@@ -235,16 +265,22 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         if (code) setRoomCode(code);
 
         setPhase("waiting");
-        if (typeof msg.pendingEndsAt === "number") setPendingEndsAt(msg.pendingEndsAt);
 
-        if (msg.kind === "respond_to_bang" && typeof msg.fromPlayerId === "string") {
-        }
+        // ✅ pending من السيرفر غالبًا مش موجود، فبنركبه من msg
+        const nextPending: Pending = msg.pending ?? { kind: msg.kind ?? "unknown", ...msg };
+
+        setPending(nextPending);
+        if (typeof msg.pendingEndsAt === "number") setPendingEndsAt(msg.pendingEndsAt);
         return;
       }
 
       if (msg.type === "action_resolved") {
         const code = normCode(msg.roomCode);
         if (code) setRoomCode(code);
+
+        setPhase("main");
+        setPending(null);
+        setPendingEndsAt(null);
         return;
       }
 
@@ -254,9 +290,28 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
         if (typeof msg.turnPlayerId === "string") setTurnPlayerId(msg.turnPlayerId);
 
-        // phase/pending/timers
         if (msg.phase === "main" || msg.phase === "waiting") setPhase(msg.phase);
-        setPending((msg.pending ?? null) as Pending);
+
+        // ✅ حماية: ما تمسح pending إذا اللعبة waiting ولسا السيرفر بعث pending ناقص/فارغ
+        setPending((prev) => {
+          const next = (msg.pending ?? null) as Pending;
+
+          if (!next && msg.phase === "waiting") return prev;
+
+          // لو choose_draw وجاي pending بدون options، خذ options من prev
+          if (
+            next &&
+            next.kind === "choose_draw" &&
+            !Array.isArray((next as any).options) &&
+            prev &&
+            prev.kind === "choose_draw" &&
+            Array.isArray((prev as any).options)
+          ) {
+            return { ...next, options: (prev as any).options };
+          }
+
+          return next;
+        });
 
         if (typeof msg.turnEndsAt === "number") setTurnEndsAt(msg.turnEndsAt);
         if (typeof msg.pendingEndsAt === "number") setPendingEndsAt(msg.pendingEndsAt);
@@ -265,16 +320,32 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // ✅ me_state
       if (msg.type === "me_state") {
         const code = normCode(msg.roomCode);
         if (code) setRoomCode(code);
 
+        // ✅ خذ كمان phase/pending/turn من me_state إذا السيرفر بعتهم
+        if (typeof msg.turnPlayerId === "string") setTurnPlayerId(msg.turnPlayerId);
+        if (msg.phase === "main" || msg.phase === "waiting") setPhase(msg.phase);
+        if (typeof msg.turnEndsAt === "number") setTurnEndsAt(msg.turnEndsAt);
+        if (typeof msg.pendingEndsAt === "number") setPendingEndsAt(msg.pendingEndsAt);
+        if (msg.pending !== undefined) {
+          setPending((prev) => (msg.pending === null ? prev : (msg.pending as Pending)));
+        }
+
         if (msg.me) {
+          const equipment = Array.isArray(msg.me?.equipment) ? msg.me.equipment : [];
+          const table = msg.me?.table ?? null;
+
           const m: MePlayer = {
             ...msg.me,
-            weaponKey: (msg.me?.weaponKey as WeaponKey) ?? weaponFromEquipment(msg.me?.equipment),
+            id: String(msg.me?.id ?? ""),
+            name: String(msg.me?.name ?? ""),
+            equipment,
+            hand: Array.isArray(msg.me?.hand) ? msg.me.hand : [],
+            weaponKey: (msg.me?.weaponKey as WeaponKey) ?? weaponFromTableOrEquipment(table, equipment),
           };
+
           setMe(m);
         }
         return;
@@ -310,10 +381,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       lobbyPlayers,
       setLobbyPlayers,
+      roomReady,
+      setRoomReady,
+      maxPlayers,
+      setMaxPlayers,
 
       players,
       setPlayers,
-
       me,
       setMe,
 
@@ -321,9 +395,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setTurnPlayerId,
 
       phase,
+      setPhase,
       pending,
+      setPending,
       turnEndsAt,
+      setTurnEndsAt,
       pendingEndsAt,
+      setPendingEndsAt,
 
       lastError,
       clearError,
@@ -333,12 +411,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       connectWS,
       sendWS,
       closeWS,
+
+      resetAll,
     }),
     [
       name,
       avatarUri,
       roomCode,
       lobbyPlayers,
+      roomReady,
+      maxPlayers,
       players,
       me,
       turnPlayerId,

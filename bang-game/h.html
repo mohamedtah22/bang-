@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mohamed Taha — Portfolio</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+
+  <body>
+    <div class="bg-glow"></div>
+
+    <header class="container header">
+      <div class="hero simple">
+        <div class="hero-left">
+          <span class="pill">Projects Portfolio</span>
+          <h1>Mohamed Taha</h1>
+
+          <p class="subtitle" style="max-width: 80ch;">
+            Third-year Computer Science student with a GPA of 80+. During my studies, I completed several software
+            projects across operating systems (xv6), full-stack web development, C++, and networking. I also have strong
+            practical interest in compilers, cloud, and distributed systems.
+          </p>
+
+          <p class="subtitle" style="margin-top: 10px; max-width: 90ch;">
+            <b>Skills:</b> C, C++, Java, Python, JavaScript/TypeScript, OCaml, Scheme, Assembly • React, Node.js & Express
+            (REST APIs) • Java Sockets (Client–Server) • HTML/CSS • AWS (S3/SQS/EC2) • Git, Linux • React Native, Flutter
+          </p>
+
+          <div class="hero-actions" style="margin-top: 14px;">
+            <a class="btn primary" href="https://github.com/mohamedtah22" target="_blank" rel="noreferrer">GitHub</a>
+            <a class="btn secondary" href="mailto:mhmd.taha5123@gmail.com">mhmd.taha5123@gmail.com</a>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="container" id="projects">
+      <!-- FRONTEND / FULL-STACK -->
+      <section class="section">
+        <div class="section-head">
+          <h2>Frontend / Full-Stack</h2>
+          <span class="section-sub">React UI + Express API</span>
+        </div>
+
+        <article class="project card">
+          <div class="project-head">
+            <div>
+              <h3>FrontEndbgu — Notes App (Full-Stack)</h3>
+              <p class="stack">React • JavaScript/TypeScript • Express.js • REST API</p>
+            </div>
+            <div class="badge2">Featured</div>
+          </div>
+
+          <p class="desc">
+            A full-stack notes application: a React frontend with a clean UI, backed by an Express.js server that exposes
+            API endpoints for managing notes. Built around a clear CRUD flow (create / read / update / delete), with
+            organized code and a practical architecture.
+          </p>
+
+          <ul class="bullets">
+            <li>Frontend: reusable React components + state handling</li>
+            <li>Backend: Express REST API for notes operations</li>
+            <li>Clean structure and readable code for maintenance</li>
+          </ul>
+
+          <div class="links">
+            <a href="https://github.com/mohamedtah22/FrontEndbgu" target="_blank" rel="noreferrer">Open Repository</a>
+          </div>
+        </article>
+      </section>
+
+      <!-- C++ / OOP -->
+      <section class="section">
+        <div class="section-head">
+          <h2>C++ / OOP</h2>
+          <span class="section-sub">Systems-style coding</span>
+        </div>
+
+        <article class="project card">
+          <div class="project-head">
+            <div>
+              <h3>warehouse — Warehouse Management (C++)</h3>
+              <p class="stack">C++ • OOP • Data Structures</p>
+            </div>
+          </div>
+
+          <p class="desc">
+            A C++ project focused on clean object-oriented design and using data structures to manage warehouse entities
+            and operations in a structured way.
+          </p>
+
+          <ul class="bullets">
+            <li>OOP design: classes, encapsulation, clear responsibilities</li>
+            <li>Inventory operations: add/update/search and manage quantities</li>
+            <li>Attention to correctness and edge cases</li>
+          </ul>
+
+          <div class="links">
+            <a href="https://github.com/mohamedtah22/warehouse" target="_blank" rel="noreferrer">Open Repository</a>
+          </div>
+        </article>
+      </section>
+
+      <!-- NETWORKING -->
+      <section class="section">
+        <div class="section-head">
+          <h2>Networking</h2>
+          <span class="section-sub">Java • Sockets • Client/Server</span>
+        </div>
+
+        <article class="project card">
+          <div class="project-head">
+            <div>
+              <h3>SERVER-CLIENT — Data Transfer over Sockets (Java)</h3>
+              <p class="stack">Java • Sockets • Protocol • File Transfer (Images/Videos)</p>
+            </div>
+          </div>
+
+          <p class="desc">
+            A Java client-server networking project using sockets to send data between endpoints. Supports transferring
+            files such as images and videos, with a focus on clean protocol handling, message framing, and reliable
+            communication.
+          </p>
+
+          <ul class="bullets">
+            <li>Socket programming (client/server) and connection handling</li>
+            <li>Send/receive files (e.g., images/videos) between two machines</li>
+            <li>Clear separation between networking logic and application logic</li>
+          </ul>
+
+          <div class="links">
+            <a href="https://github.com/mohamedtah22/SERVER-CLIENT" target="_blank" rel="noreferrer">Open Repository</a>
+          </div>
+        </article>
+      </section>
+
+      <!-- OPERATING SYSTEMS (NEW) -->
+      <section class="section">
+        <div class="section-head">
+          <h2>Operating Systems</h2>
+          <span class="section-sub">xv6 kernel extensions</span>
+        </div>
+
+        <article class="project card">
+          <div class="project-head">
+            <div>
+              <h3>xv6 Shared Memory & Multi-process Logging System</h3>
+              <p class="stack">C • xv6 Kernel • Virtual Memory • Atomic Sync</p>
+            </div>
+            <div class="badge2">xv6</div>
+          </div>
+
+          <p class="desc">
+            Extended the xv6 operating system with shared memory support and used it to build a synchronized
+            multi-process logging system. The project enables multiple processes to share physical pages safely and
+            coordinate access to a shared logging buffer using atomic operations.
+          </p>
+
+          <ul class="bullets">
+            <li><b>Shared Memory API:</b> implemented <code>map_shared_pages</code> to map physical pages across processes</li>
+            <li><b>VM work:</b> used <code>walk()</code> and <code>mappages()</code>; handled alignment with PGROUNDDOWN/PGROUNDUP</li>
+            <li><b>Safety:</b> introduced a custom shared-page flag (PTE_S) so pages are freed only by original owners</li>
+            <li><b>Logging:</b> shared buffer + atomic CAS (<code>__sync_val_compare_and_swap</code>) to prevent races</li>
+            <li><b>Tests:</b> <code>shmem_test</code> and <code>log_test</code> + run via <code>make qemu</code></li>
+          </ul>
+
+          <div class="links">
+            <a href="https://github.com/mohamedtah22/xv6-Shared-Memory-Support" target="_blank" rel="noreferrer">
+              Open Repository
+            </a>
+          </div>
+        </article>
+      </section>
+
+      <!-- COMPILERS -->
+      <section class="section">
+        <div class="section-head">
+          <h2>Compilers</h2>
+          <span class="section-sub">Scheme → Assembly • Type systems</span>
+        </div>
+
+        <article class="project card">
+          <div class="project-head">
+            <div>
+              <h3>compiler — Scheme Compiler</h3>
+              <p class="stack">Parsing • AST • Semantics • Code Generation • Assembly</p>
+            </div>
+          </div>
+
+          <p class="desc">
+            A compiler project that compiles a subset of <b>Scheme</b> into <b>assembly</b>. It includes the full
+            compilation pipeline: parsing Scheme code, building an AST, performing transformations, and generating
+            low-level assembly output ready for execution.
+          </p>
+
+          <ul class="bullets">
+            <li>Parses Scheme source into a structured AST</li>
+            <li>Handles compilation stages and transformations</li>
+            <li>Generates assembly code (Scheme → Assembly)</li>
+          </ul>
+
+          <div class="links">
+            <a href="https://github.com/mohamedtah22/compiler" target="_blank" rel="noreferrer">Open Repository</a>
+          </div>
+        </article>
+
+        <!-- L52 (NEW) -->
+        <article class="project card">
+          <div class="project-head">
+            <div>
+              <h3>L52 Language Interpreter</h3>
+              <p class="stack">TypeScript • Static Type Checker • Interpreter • AST</p>
+            </div>
+            <div class="badge2">Types</div>
+          </div>
+
+          <p class="desc">
+            Extended the L5 functional language into <b>L52</b> by implementing an advanced static type-checker and an
+            interpreter. The project focuses on set-theoretic types and type reasoning inside programs.
+          </p>
+
+          <ul class="bullets">
+            <li><b>Complex types:</b> Union, Intersection, and Difference types (set-theoretic principles)</li>
+            <li><b>Type predicates:</b> support for predicates (e.g., <code>is? number</code>) with type narrowing</li>
+            <li><b>Normalization:</b> flattening/normalizing into Disjunctive Normal Form (DNF)</li>
+            <li><b>Subtyping:</b> extended subtype logic for special atomic types (e.g., <code>any</code>, <code>never</code>)</li>
+            <li><b>Testing:</b> run with <code>npm test</code></li>
+          </ul>
+
+          <div class="links">
+            <a href="https://github.com/mohamedtah22/L52-Language-Interpreter" target="_blank" rel="noreferrer">
+              Open Repository
+            </a>
+          </div>
+        </article>
+      </section>
+
+      <!-- CLOUD / AWS -->
+      <section class="section">
+        <div class="section-head">
+          <h2>Cloud / Distributed Systems</h2>
+          <span class="section-sub">AWS • Large-scale text/book processing</span>
+        </div>
+
+        <article class="project card">
+          <div class="project-head">
+            <div>
+              <h3>Text-Analysis-in-the-Cloud</h3>
+              <p class="stack">AWS • S3 • SQS • EC2 • Pipeline Architecture</p>
+            </div>
+            <div class="badge2">AWS</div>
+          </div>
+
+          <p class="desc">
+            A cloud-based text analysis pipeline built on AWS that processes large collections of books/documents.
+            Inputs are uploaded to S3, tasks are coordinated through SQS, and computation runs on EC2 in a distributed
+            manager/worker workflow. The system produces structured analysis outputs from raw text.
+          </p>
+
+          <ul class="bullets">
+            <li>Processes large book/document datasets using a distributed workflow</li>
+            <li>Manager/worker architecture with queue-based coordination</li>
+            <li>AWS integration: S3 for storage, SQS for tasks, EC2 for compute</li>
+            <li>Outputs structured results that can be used for further analysis</li>
+          </ul>
+
+          <div class="links">
+            <a href="https://github.com/MohamedAli74/Text-Analysis-in-the-Cloud" target="_blank" rel="noreferrer">
+              Open Repository
+            </a>
+          </div>
+        </article>
+
+        <article class="project card">
+          <div class="project-head">
+            <div>
+              <h3>Text-Mining-MapReduce-Engine</h3>
+              <p class="stack">Java • MapReduce style • Distributed processing • AWS workflow</p>
+            </div>
+            <div class="badge2">MapReduce</div>
+          </div>
+
+          <p class="desc">
+            A MapReduce-style text mining engine that processes large inputs by splitting work across stages. Emphasizes
+            pipeline design, correctness, and distributed execution workflow.
+          </p>
+
+          <ul class="bullets">
+            <li>Multi-stage processing (mapper/reducer-style stages)</li>
+            <li>Designed to scale across distributed resources</li>
+            <li>Clear separation between stages and responsibilities</li>
+          </ul>
+
+          <div class="links">
+            <a href="https://github.com/MohamedAli74/Text-Mining-MapReduce-Engine" target="_blank" rel="noreferrer">
+              Open Repository
+            </a>
+          </div>
+        </article>
+      </section>
+
+      <!-- GAME / REALTIME -->
+      <section class="section">
+        <div class="section-head">
+          <h2>Game / Realtime</h2>
+          <span class="section-sub">Rooms • Live events</span>
+        </div>
+
+        <article class="project card">
+          <div class="project-head">
+            <div>
+              <h3>bang- — Multiplayer Card Game (Realtime)</h3>
+              <p class="stack">WebSocket • Realtime rooms • Multiplayer events</p>
+            </div>
+          </div>
+
+          <p class="desc">
+            A multiplayer card game project inspired by <b>BANG!</b>. Built around room creation/joining and real-time
+            gameplay events. WebSockets are used to keep players synchronized instantly during the match.
+          </p>
+
+          <ul class="bullets">
+            <li>Real-time communication using WebSockets</li>
+            <li>Rooms / sessions management (create & join flow)</li>
+            <li>Event-based gameplay updates between players</li>
+          </ul>
+
+          <div class="links">
+            <a href="https://github.com/mohamedtah22/bang-" target="_blank" rel="noreferrer">Open Repository</a>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

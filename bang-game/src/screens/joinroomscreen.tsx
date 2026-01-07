@@ -13,7 +13,7 @@ import {
 import { useNavigation } from "@react-navigation/native";
 import { usePlayer } from "../contexts/playercontext";
 
-export const WS_URL = "ws://192.168.0.106:3000";
+export const WS_URL = "ws://10.14.3.212:3000";
 
 type Phase = "idle" | "joining" | "joined";
 
@@ -26,7 +26,6 @@ type FeedItem = {
 export default function JoinRoomScreen() {
   const navigation = useNavigation<any>();
 
-  // من الكونتكست
   const {
     name,
     ws,

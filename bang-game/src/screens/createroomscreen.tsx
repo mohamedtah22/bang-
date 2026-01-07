@@ -10,7 +10,7 @@ import {
 import { useNavigation } from "@react-navigation/native";
 import { usePlayer } from "../contexts/playercontext";
 
-export const WS_URL = "ws://192.168.0.106:3000";
+export const WS_URL = "ws://10.14.3.212:3000";
 
 export default function CreateRoomScreen() {
   const navigation = useNavigation<any>();
@@ -25,31 +25,31 @@ export default function CreateRoomScreen() {
 
     setPlayers,
     setMe,
+    turnPlayerId,
     setTurnPlayerId,
 
+    ws,           // ✅ خذ ws من الكونتكست
     wsStatus,
     connectWS,
     sendWS,
-
-    turnPlayerId,
   } = usePlayer();
 
   const sentCreateRef = useRef(false);
   const startingRef = useRef(false);
-  const leftRef = useRef(false);
 
   const [maxPlayers] = useState(7);
   const [loading, setLoading] = useState(true);
+  const [serverStarted, setServerStarted] = useState(false);
 
   const playersCount = lobbyPlayers.length;
-
   const canStart = useMemo(() => playersCount >= 4, [playersCount]);
 
-  // ✅ نظّف أي ستايت قديم أول ما تفوت الشاشة (عشان ما يعمل navigate بالغلط)
+  // reset on enter
   useEffect(() => {
-    startingRef.current = false;
     sentCreateRef.current = false;
-    leftRef.current = false;
+    startingRef.current = false;
+
+    setServerStarted(false);
 
     setRoomCode("");
     setLobbyPlayers([]);
@@ -60,12 +60,12 @@ export default function CreateRoomScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ افتح WS
+  // open WS
   useEffect(() => {
     connectWS(WS_URL);
   }, [connectWS]);
 
-  // ✅ ابعث create مرة وحدة بس لما الاتصال يصير OPEN
+  // send create once
   useEffect(() => {
     if (wsStatus !== "open") return;
     if (sentCreateRef.current) return;
@@ -80,19 +80,45 @@ export default function CreateRoomScreen() {
     sendWS({ type: "create", name: name.trim() });
   }, [wsStatus, name, sendWS]);
 
-  // ✅ لما يوصل roomCode من السيرفر (created) خلّص loading
+  // stop loading when roomCode arrives
   useEffect(() => {
     if (roomCode) setLoading(false);
   }, [roomCode]);
 
-  // ✅ إذا اللعبة بلشت (turnPlayerId اتحدد) -> روح على Game مرة وحدة
+  // ✅ اسمع started/game_state من السيرفر
   useEffect(() => {
-    if (!turnPlayerId) return;
-    if (startingRef.current) return;
+    if (!ws) return;
 
-    startingRef.current = true;
-    navigation.navigate("GameScreen");
-  }, [turnPlayerId, navigation]);
+    const onMsg = (e: any) => {
+      let msg: any;
+      try {
+        msg = JSON.parse(e.data);
+      } catch {
+        return;
+      }
+
+      if (msg.type === "started") {
+        setServerStarted(true);
+      }
+      if (msg.type === "game_state" && typeof msg.turnPlayerId === "string") {
+        setServerStarted(true);
+      }
+    };
+
+    ws.addEventListener("message", onMsg);
+    return () => ws.removeEventListener("message", onMsg);
+  }, [ws]);
+
+  // navigate once
+  useEffect(() => {
+    if (startingRef.current) return;
+    if (!roomCode) return;
+
+    if (serverStarted || !!turnPlayerId) {
+      startingRef.current = true;
+      navigation.navigate("GameScreen");
+    }
+  }, [serverStarted, turnPlayerId, roomCode, navigation]);
 
   const handleStart = () => {
     if (wsStatus !== "open") {
@@ -108,20 +134,15 @@ export default function CreateRoomScreen() {
       return;
     }
 
-    // ✅ مهم: ابعث roomCode مع start
     sendWS({ type: "start", roomCode });
   };
 
   const handleBack = () => {
-    leftRef.current = true;
-
     try {
-      // ✅ مهم: ابعث roomCode مع leave (إذا موجود)
       if (roomCode) sendWS({ type: "leave", roomCode });
       else sendWS({ type: "leave" });
     } catch {}
 
-    // نظّف الستيت
     setRoomCode("");
     setLobbyPlayers([]);
     setPlayers([]);
@@ -200,7 +221,6 @@ export default function CreateRoomScreen() {
             <Text style={styles.hintReady}>Ready! Press START ✅</Text>
           )}
 
-          {/* Debug صغير */}
           <Text style={[styles.muted, { marginTop: 10, textAlign: "center" }]}>
             WS: {wsStatus}
           </Text>
@@ -212,10 +232,7 @@ export default function CreateRoomScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "transparent" },
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.55)",
-  },
+  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)" },
   topBar: {
     position: "absolute",
     top: 52,
@@ -245,11 +262,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.18)",
     alignItems: "flex-end",
   },
-  codeLabel: {
-    color: "rgba(255,255,255,0.75)",
-    fontSize: 12,
-    fontWeight: "700",
-  },
+  codeLabel: { color: "rgba(255,255,255,0.75)", fontSize: 12, fontWeight: "700" },
   codeText: { color: "white", fontSize: 22, fontWeight: "900" },
   card: {
     marginTop: 140,
@@ -260,19 +273,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.16)",
   },
-  title: {
-    color: "white",
-    fontSize: 26,
-    fontWeight: "900",
-    marginBottom: 10,
-  },
+  title: { color: "white", fontSize: 26, fontWeight: "900", marginBottom: 10 },
   muted: { color: "rgba(255,255,255,0.75)", fontWeight: "600" },
-  playersText: {
-    color: "white",
-    fontSize: 22,
-    fontWeight: "900",
-    marginTop: 6,
-  },
+  playersText: { color: "white", fontSize: 22, fontWeight: "900", marginTop: 6 },
   startBtn: {
     paddingVertical: 14,
     borderRadius: 18,
@@ -284,16 +287,6 @@ const styles = StyleSheet.create({
   startBtnDisabled: { backgroundColor: "rgba(255,255,255,0.15)" },
   startText: { color: "#151515", fontSize: 22, fontWeight: "900" },
   startTextDisabled: { color: "rgba(255,255,255,0.55)" },
-  hint: {
-    marginTop: 10,
-    color: "rgba(255,255,255,0.75)",
-    fontWeight: "600",
-    textAlign: "center",
-  },
-  hintReady: {
-    marginTop: 10,
-    color: "rgba(255,255,255,0.95)",
-    fontWeight: "900",
-    textAlign: "center",
-  },
+  hint: { marginTop: 10, color: "rgba(255,255,255,0.75)", fontWeight: "600", textAlign: "center" },
+  hintReady: { marginTop: 10, color: "rgba(255,255,255,0.95)", fontWeight: "900", textAlign: "center" },
 });
