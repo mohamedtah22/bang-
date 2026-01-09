@@ -1,4 +1,4 @@
-export const WS_URL = "ws://10.14.3.212:3000";
+export const WS_URL = "ws://10.10.1.98:3000";
 
 let ws: WebSocket | null = null;
 

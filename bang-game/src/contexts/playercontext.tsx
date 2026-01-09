@@ -1,3 +1,5 @@
+// src/contexts/playercontext.ts
+
 import React, { createContext, useContext, useMemo, useRef, useState } from "react";
 import type { LobbyPlayer, PublicPlayer, MePlayer } from "../models/player";
 import type { WeaponKey } from "../models/card";
@@ -6,6 +8,12 @@ type WsStatus = "idle" | "connecting" | "open" | "closed" | "error";
 
 type Phase = "main" | "waiting";
 type Pending = null | { kind: string; [k: string]: any };
+
+// ✅ جديد: نخزّن آخر action_required كامل (هو اللي فيه تفاصيل اختيارات Kit/Jesse/Pedro..)
+type ActionRequired = null | { type: "action_required"; kind: string; [k: string]: any };
+
+// ✅ جديد: نخزّن آخر passive_triggered (مثل blackjack_reveal)
+type PassiveTriggered = null | { type: "passive_triggered"; kind: string; seq: number; [k: string]: any };
 
 export const WEAPON_LABEL: Record<WeaponKey, string> = {
   colt45: "Colt .45",
@@ -63,6 +71,13 @@ type PlayerContextType = {
   pending: Pending;
   setPending: React.Dispatch<React.SetStateAction<Pending>>;
 
+  // ✅ جديد
+  actionRequired: ActionRequired;
+  setActionRequired: React.Dispatch<React.SetStateAction<ActionRequired>>;
+
+  // ✅ جديد
+  lastPassive: PassiveTriggered;
+
   turnEndsAt: number | null;
   setTurnEndsAt: React.Dispatch<React.SetStateAction<number | null>>;
 
@@ -101,14 +116,10 @@ function normalizeWeaponKey(raw: string): WeaponKey | null {
   return null;
 }
 
-/** ✅ أهم تعديل: استخراج السلاح من كرت weapon نفسه (weaponKey/weaponName/...) */
+/** ✅ استخراج السلاح من كرت weapon نفسه */
 function weaponKeyFromAnyWeaponCard(x: any): WeaponKey | null {
   if (!x) return null;
-
-  // server weapon card usually: { key:"weapon", weaponKey:"winchester", range:5, ... }
-  const raw =
-    String(x.weaponKey ?? x.weaponName ?? x.name ?? x.id ?? "").trim();
-
+  const raw = String(x.weaponKey ?? x.weaponName ?? x.name ?? x.id ?? "").trim();
   if (!raw) return null;
   return normalizeWeaponKey(raw);
 }
@@ -167,6 +178,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const [phase, setPhase] = useState<Phase>("main");
   const [pending, setPending] = useState<Pending>(null);
+
+  // ✅ جديد
+  const [actionRequired, setActionRequired] = useState<ActionRequired>(null);
+
+  // ✅ جديد: passive_triggered
+  const passiveSeqRef = useRef(0);
+  const [lastPassive, setLastPassive] = useState<PassiveTriggered>(null);
+
   const [turnEndsAt, setTurnEndsAt] = useState<number | null>(null);
   const [pendingEndsAt, setPendingEndsAt] = useState<number | null>(null);
 
@@ -175,7 +194,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const [wsStatus, setWsStatus] = useState<WsStatus>("idle");
-  const [, force] = useState(0);
+
+  // ✅ مهم: هذا عشان useMemo يعيد حساب value لما wsRef.current يتغير
+  const [wsTick, setWsTick] = useState(0);
 
   const resetAll = () => {
     setRoomCode("");
@@ -189,10 +210,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
     setPhase("main");
     setPending(null);
+    setActionRequired(null);
+
     setTurnEndsAt(null);
     setPendingEndsAt(null);
 
     setLastError(null);
+
+    // ✅ reset passive
+    passiveSeqRef.current = 0;
+    setLastPassive(null);
   };
 
   const connectWS = (url: string) => {
@@ -202,7 +229,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setWsStatus("connecting");
     const s = new WebSocket(url);
     wsRef.current = s;
-    force((x) => x + 1);
+    setWsTick((x) => x + 1);
 
     s.onopen = () => setWsStatus("open");
     s.onclose = () => setWsStatus("closed");
@@ -220,6 +247,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       if (msg.type === "error") {
         setLastError(String(msg.message ?? "Server error"));
+        return;
+      }
+
+      // ✅ passive events (مثل blackjack_reveal)
+      if (msg.type === "passive_triggered") {
+        passiveSeqRef.current += 1;
+        setLastPassive({ ...msg, seq: passiveSeqRef.current });
         return;
       }
 
@@ -241,7 +275,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      /** ✅ السيرفر ممكن يبعث started أو game_started */
       if (msg.type === "started" || msg.type === "game_started") {
         const code = normCode(msg.roomCode);
         if (code) setRoomCode(code);
@@ -257,6 +290,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         setPhase("main");
         setPending(null);
         setPendingEndsAt(null);
+
+        // ✅ مهم: لما يبدأ دور جديد سكّر أي actionRequired قديم
+        setActionRequired(null);
         return;
       }
 
@@ -266,10 +302,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
         setPhase("waiting");
 
-        // ✅ pending من السيرفر غالبًا مش موجود، فبنركبه من msg
-        const nextPending: Pending = msg.pending ?? { kind: msg.kind ?? "unknown", ...msg };
+        // ✅ نخزن الرسالة نفسها (للاختيارات)
+        setActionRequired(msg as any);
 
+        // ✅ ونركّب pending كواجهة موحّدة للـGameScreen (إذا بدك)
+        const nextPending: Pending = msg.pending ?? { kind: msg.kind ?? "unknown", ...msg };
         setPending(nextPending);
+
         if (typeof msg.pendingEndsAt === "number") setPendingEndsAt(msg.pendingEndsAt);
         return;
       }
@@ -281,6 +320,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         setPhase("main");
         setPending(null);
         setPendingEndsAt(null);
+
+        // ✅ سكّر overlay
+        setActionRequired(null);
         return;
       }
 
@@ -292,13 +334,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
         if (msg.phase === "main" || msg.phase === "waiting") setPhase(msg.phase);
 
-        // ✅ حماية: ما تمسح pending إذا اللعبة waiting ولسا السيرفر بعث pending ناقص/فارغ
+        // ✅ لا تمسح pending / actionRequired إذا لسا waiting و msg.pending ناقص
         setPending((prev) => {
           const next = (msg.pending ?? null) as Pending;
 
           if (!next && msg.phase === "waiting") return prev;
 
-          // لو choose_draw وجاي pending بدون options، خذ options من prev
           if (
             next &&
             next.kind === "choose_draw" &&
@@ -317,6 +358,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         if (typeof msg.pendingEndsAt === "number") setPendingEndsAt(msg.pendingEndsAt);
 
         setPlayers(parsePublicPlayers(msg.players));
+
+        // ✅ لو السيرفر رجّع main بدون pending، سكّر actionRequired
+        if (msg.phase === "main" && !msg.pending) {
+          setActionRequired(null);
+        }
+
         return;
       }
 
@@ -324,13 +371,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         const code = normCode(msg.roomCode);
         if (code) setRoomCode(code);
 
-        // ✅ خذ كمان phase/pending/turn من me_state إذا السيرفر بعتهم
         if (typeof msg.turnPlayerId === "string") setTurnPlayerId(msg.turnPlayerId);
         if (msg.phase === "main" || msg.phase === "waiting") setPhase(msg.phase);
         if (typeof msg.turnEndsAt === "number") setTurnEndsAt(msg.turnEndsAt);
         if (typeof msg.pendingEndsAt === "number") setPendingEndsAt(msg.pendingEndsAt);
+
         if (msg.pending !== undefined) {
-          setPending((prev) => (msg.pending === null ? prev : (msg.pending as Pending)));
+          // ✅ لا تمسح pending إذا waiting وجاي null
+          setPending((prev) => (msg.pending === null && msg.phase === "waiting" ? prev : (msg.pending as Pending)));
         }
 
         if (msg.me) {
@@ -348,6 +396,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
           setMe(m);
         }
+
+        // ✅ لو me_state قال main، سكّر actionRequired
+        if (msg.phase === "main") {
+          setActionRequired(null);
+        }
+
         return;
       }
     };
@@ -366,7 +420,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     } catch {}
     wsRef.current = null;
     setWsStatus("closed");
-    force((x) => x + 1);
+    setWsTick((x) => x + 1);
   };
 
   const value = useMemo<PlayerContextType>(
@@ -398,6 +452,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setPhase,
       pending,
       setPending,
+
+      // ✅ جديد
+      actionRequired,
+      setActionRequired,
+
+      // ✅ جديد
+      lastPassive,
+
       turnEndsAt,
       setTurnEndsAt,
       pendingEndsAt,
@@ -426,10 +488,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       turnPlayerId,
       phase,
       pending,
+      actionRequired,
+      lastPassive, // ✅ مهم
       turnEndsAt,
       pendingEndsAt,
       lastError,
       wsStatus,
+      wsTick, // ✅ مهم
     ]
   );
 

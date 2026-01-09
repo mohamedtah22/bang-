@@ -181,7 +181,6 @@ const CHARACTER_HP: Record<CharacterId, number> = {
   willy_the_kid: 4,
 };
 
-// ✅ suits/ranks ثابتين لآليات Draw!
 const SUITS = ["spades", "hearts", "diamonds", "clubs"] as const;
 const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"] as const;
 
@@ -248,7 +247,6 @@ function initDeckAndDeal(room: GameRoom) {
     p.hand = [];
     p.equipment = [];
 
-    // ✅ توزيع أولي: عدد كروت = HP (maxHp)
     for (let i = 0; i < p.maxHp; i++) {
       const c = room.deck.pop();
       if (!c) throw new Error("Deck is empty during initial deal");
@@ -396,7 +394,6 @@ export function handleStart(ws: any) {
   room.pending = null;
   room.bangsUsedThisTurn = 0;
 
-  // ✅ جهّز الدك + وزّع أولي
   try {
     initDeckAndDeal(room);
   } catch (e: any) {
@@ -404,10 +401,8 @@ export function handleStart(ws: any) {
     return safeSend(ws, { type: "error", message: e?.message || "Failed to init deck" });
   }
 
-  // ✅ خلي الواجهة تنتقل أولاً
   broadcastRoom(room, { type: "started", roomCode: room.code });
 
-  // ✅ ابدأ أول دور (dynamite/jail/draw... + timers)
   setTimeout(() => {
     try {
       startTurn(room as any);

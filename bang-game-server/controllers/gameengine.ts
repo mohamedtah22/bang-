@@ -9,7 +9,6 @@ const RESPONSE_MS = 12_000;
 
 type Phase = "main" | "waiting";
 
-/** ===== character ids (لازم تتطابق مع playcharacter عندك) ===== */
 const CHAR = {
   bart: "bart_cassidy",
   blackjack: "black_jack",
@@ -41,7 +40,7 @@ type Pending =
       kind: "bang";
       attackerId: string;
       targetId: string;
-      requiredMissed: number; // 1 عادة، 2 إذا Slab the Killer
+      requiredMissed: number; 
       missedSoFar: number;
     }
   | {
@@ -305,7 +304,6 @@ function weaponRange(p: Player): number {
 
   const wKey = String(w.weaponKey ?? w.weaponName ?? w.name ?? "").toLowerCase();
 
-  // دعم أسماء/مفاتيح شائعة
   if (wKey.includes("volcanic")) return 1;
   if (wKey.includes("schofield")) return 2;
   if (wKey.includes("remington")) return 3;

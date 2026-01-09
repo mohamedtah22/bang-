@@ -14,7 +14,6 @@ import {
   handleRespond,
   handleEndTurn,
 
-  // ✅ الجديد (choices/abilities)
   handleChooseDraw,
   handleChooseJesseTarget,
   handleChoosePedroSource,
@@ -77,7 +76,6 @@ export function routeMessage(ws: any, msg: any) {
   }
 
   try {
-    // ✅ إذا الرسالة لازم فيها roomCode، افحصه
     if (mustHaveRoomCode(msg.type)) {
       assertRoomMatches(ws, msg);
     }
@@ -90,11 +88,11 @@ export function routeMessage(ws: any, msg: any) {
         return handleCreate(ws, msg);
 
       case "join":
-        // msg: { type:"join", roomCode:string, name?:string }
+        // msg: { type:"join", roomCode:string, name:string }
         return handleJoin(ws, msg);
 
       case "leave":
-        // msg: { type:"leave" }  (roomCode اختياري)
+        // msg: { type:"leave" }  
         return handleLeave(ws);
 
       case "start":
@@ -115,7 +113,7 @@ export function routeMessage(ws: any, msg: any) {
         // msg: { type:"end_turn", roomCode:string }
         return handleEndTurn(ws, msg);
 
-      /** ================== ✅ الجديد (choices/abilities) ================== */
+      /** ================== (choices/abilities) ================== */
 
       case "choose_draw":
         // Kit Carlson:
