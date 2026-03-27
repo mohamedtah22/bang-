@@ -1,6 +1,4 @@
-// src/models/player.ts
-
-import type { Card } from "./card";
+import type { Card, WeaponKey } from "./card";
 
 export type Role = "sheriff" | "deputy" | "outlaw" | "renegade";
 
@@ -21,6 +19,10 @@ export type PublicPlayer = {
 
   equipment: Card[];
   handCount: number;
+  disconnected?: boolean;
+  connectionLost?: boolean;
+
+  weaponKey: WeaponKey;
 };
 
 export type MePlayer = Omit<PublicPlayer, "handCount"> & {

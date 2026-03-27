@@ -5,4 +5,13 @@ export type Room = {
   players: Player[];
   ready: boolean;
   maxPlayers: number;
+
+  // ✅ لازم
+  phase?: "main" | "waiting";
+  pending?: any;
+  pendingEndsAt?: number;
+
+  // ✅ لحساب عدد bang بالدور
+  bangsUsedThisTurn?: number;
 };
+

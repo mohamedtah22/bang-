@@ -24,6 +24,7 @@ export type CharacterId =
   | "willy_the_kid";
 
 export type Suit = "spades" | "hearts" | "diamonds" | "clubs";
+
 export type Rank =
   | "A"
   | "2"
@@ -40,19 +41,17 @@ export type Rank =
   | "K";
 
 /**
- * Card keys (base game)
- * - Brown: instant
- * - Blue: equipment / in-play
- *
- * ملاحظة: خليت الأسلحة مفصّلة (volcanic/schofield/...) عشان الرينج يكون واضح
+ * Card keys used across the project.
+ * Includes both old and new naming variants where needed
+ * so the current codebase does not break.
  */
 export type CardKey =
-  // brown
   | "bang"
   | "missed"
   | "beer"
   | "panic"
   | "catbalou"
+  | "cat_balou"
   | "duel"
   | "gatling"
   | "indians"
@@ -61,7 +60,6 @@ export type CardKey =
   | "wellsfargo"
   | "saloon"
   | "weapon"
-  // blue
   | "jail"
   | "dynamite"
   | "barrel"
@@ -93,19 +91,37 @@ export const CHARACTER_HP: Record<CharacterId, number> = {
   willy_the_kid: 4,
 };
 
+export type WeaponName =
+  | "volcanic"
+  | "schofield"
+  | "remington"
+  | "carabine"
+  | "rev_carabine"
+  | "winchester";
+
 export type Card = {
-  id: string; // unique instance id
+  id: string;
   key: CardKey;
   suit?: Suit;
   rank?: Rank;
+
+  /** optional weapon metadata used in your engine */
+  weaponName?: WeaponName | string;
+  range?: number;
+
+  /** allow extra runtime fields without breaking older code */
+  [k: string]: any;
 };
 
 export type Player = {
   id: string;
   name: string;
 
-  /** server only */
-  ws: WebSocket;
+  /** server-side socket; may be undefined after disconnect */
+  ws?: WebSocket;
+
+  /** stable client session id used to dedupe rapid reconnects */
+  clientSessionId?: string;
 
   role: Role;
   playcharacter: CharacterId;
@@ -114,8 +130,15 @@ export type Player = {
   maxHp: number;
   isAlive: boolean;
 
+  /** marked true when player leaves during game */
+  disconnected?: boolean;
+
+  /** temporary grace period after socket loss */
+  reconnectDeadlineAt?: number;
+  reconnectTimer?: any;
+
   hand: Card[];
-  equipment: Card[]; // includes blue cards in front of player
+  equipment: Card[];
 };
 
 export type PublicPlayer = Omit<Player, "ws" | "hand"> & {
@@ -131,6 +154,7 @@ export function toPublicPlayer(p: Player): PublicPlayer {
     hp: p.hp,
     maxHp: p.maxHp,
     isAlive: p.isAlive,
+    disconnected: !!p.disconnected,
     equipment: p.equipment,
     handCount: p.hand.length,
   };

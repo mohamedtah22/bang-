@@ -1,0 +1,3 @@
+{"type":"join","roomCode":"z3vw0b","name":"LLL"}
+npx wscat -c ws://10.0.0.10:3000felt
+cd "C:\Users\מוחמד\bang-\bang-game-server"

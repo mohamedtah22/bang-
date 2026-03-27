@@ -1,1610 +1,2632 @@
 // src/screens/GameScreen.tsx
 
-import React, { useMemo, useRef, useState, useEffect, useCallback } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigation } from "@react-navigation/native";
 import {
-  View,
-  Text,
-  Pressable,
-  FlatList,
-  StyleSheet,
-  ImageBackground,
-  Image,
-  Modal,
-  useWindowDimensions,
-  ScrollView,
-  SafeAreaView,
   Animated,
-  Easing,
+  ImageBackground,
+  PanResponder,
+  Pressable,
+  SafeAreaView,
+  Alert,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
 } from "react-native";
 
-import { usePlayer, WEAPON_LABEL, WEAPON_RANGE } from "../contexts/playercontext";
-import type { Card, WeaponKey } from "../models/card";
+import { usePlayer } from "../contexts/playercontext";
+import type { Card } from "../models/card";
+import type { PublicPlayer } from "../models/player";
 
-import { getCardImage, CARD_BACK } from "../data/cardAssets";
-import { ROLE_IMAGES } from "../data/roleAssets";
-import { getCharacterSafe } from "../models/characters";
+import { OpponentsRow } from "./game/OpponentsRow";
+import { TableCenter } from "./game/TableCenter";
+import { HandBar } from "./game/HandBar";
+import { ActionOverlay } from "./game/ActionOverlay";
+import { FxLayer, type FxEvent, type FxKind } from "./game/FxLayer";
+import { DrawMotionLayer, type DrawMotionEvent } from "./game/DrawMotionLayer";
+import { DrawCheckOverlay } from "./game/DrawCheckOverlay";
+import { GeneralStorePanel } from "./game/GeneralStorePanel";
+import { EventBanner } from "./game/EventBanner";
+import EndGameOverlay from "./game/EndGameOverlay";
+import CharacterAbilityOverlay from "./game/CharacterAbilityOverlay";
+import { ChatOverlay } from "./game/ChatOverlay";
+import { useGameSounds } from "./game/useGameSounds";
+import { useAmbientMusic } from "./game/useAmbientMusic";
+import StartInfoOverlay from "./game/StartInfoOverlay";
+import WoodButton from "./game/WoodButton";
 
-// ✅ حط صورة الخشبة هون (عدّل المسار حسب مشروعك)
-const WOOD_BOARD = require("../../assets/wood_board.png");
+import { PassiveToast } from "./characters/PassiveToast";
+import { CharacterPanel, getNeedsAttention } from "./characters/CharacterPanel";
 
-const OPP_CARD_W = 190;
-const GAP = 12;
+const GAME_BG = require("../../assets/gamescreen.png");
 
-/** ================== HELPERS ================== */
+const RESOLVE_ACTION_TYPE = "resolve_action";
+const SID_HEAL_TYPE = "sid_heal";
 
-function rotateToMe<T extends { id: string }>(arr: T[], myId: string) {
-  const idx = arr.findIndex((p) => p.id === myId);
-  if (idx <= 0) return arr;
-  return [...arr.slice(idx), ...arr.slice(0, idx)];
-}
-
-function normalizeWeaponKey(raw: string): WeaponKey | null {
-  const s = raw.trim().toLowerCase().replace(/\./g, "").replace(/\s+/g, "_");
-  if (s === "colt_45" || s === "colt45") return "colt45";
-  if (s === "volcanic") return "volcanic";
-  if (s === "schofield") return "schofield";
-  if (s === "remington") return "remington";
-  if (s === "rev_carabine" || s === "revcarabine") return "rev_carabine";
-  if (s === "winchester") return "winchester";
-  return null;
-}
-
-function weaponFromEquipment(equipment: any[]): WeaponKey {
-  if (!Array.isArray(equipment)) return "colt45";
-
-  for (const it of equipment) {
-    if (it?.key === "weapon" && it?.weaponKey) return it.weaponKey as WeaponKey;
-  }
-
-  for (const it of equipment) {
-    const k = normalizeWeaponKey(String(it?.weaponKey ?? it?.key ?? it?.id ?? it?.name ?? it ?? ""));
-    if (k) return k;
-  }
-
-  return "colt45";
-}
-
-function isWeaponItem(x: any) {
-  if (!x) return false;
-  if (x?.key === "weapon") return true;
-  const maybe = String(x?.weaponKey ?? x?.key ?? x?.id ?? x?.name ?? x ?? "");
-  return !!normalizeWeaponKey(maybe);
-}
-
-function pickFirstBlueEquipment(equipment: any[]) {
-  if (!Array.isArray(equipment)) return null;
-  const nonWeapon = equipment.filter((x) => !isWeaponItem(x));
-  return nonWeapon.length ? nonWeapon[0] : null;
-}
-
-function findEquippedWeaponCard(equipment: any[]) {
-  if (!Array.isArray(equipment)) return null;
-  const w = equipment.find(
-    (x) =>
-      x?.key === "weapon" ||
-      (x && normalizeWeaponKey(String(x?.weaponKey ?? x?.key ?? x?.id ?? x?.name ?? "")))
-  );
-  return w ?? null;
-}
-
-function formatSeconds(totalSec: number) {
-  const sec = Math.max(0, Math.floor(totalSec));
-  const mm = Math.floor(sec / 60);
-  const ss = sec % 60;
-  return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
-}
-
-function safeCardImage(c: any) {
-  if (!c) return null;
-  try {
-    return getCardImage(c) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function cardLabel(c: any) {
+function cardUid(c: any): string {
   if (!c) return "";
-  if (typeof c === "string") return c;
-  return String(c.key ?? c.weaponName ?? c.weaponKey ?? c.id ?? "");
+  const base = c.id ?? c.cardId ?? c._id ?? c.uid ?? c.uuid;
+  if (base) return String(base);
+
+  const k = String(c.key ?? c.name ?? "card");
+  const r = String(c.rank ?? "");
+  const s = String(c.suit ?? "");
+  return `${k}_${r}_${s}`;
 }
 
-function normPendingKind(pending: any): string {
-  return String(pending?.kind ?? pending?.type ?? "").toLowerCase();
+function hasEquip(p: any, key: string) {
+  const eq = Array.isArray(p?.equipment) ? p.equipment : [];
+  return eq.some((c: any) => String(c?.key) === key);
 }
 
-function includesAny(s: string, arr: string[]) {
-  return arr.some((x) => s.includes(x));
+function seatDistance(order: string[], aId: string, bId: string) {
+  const n = order.length;
+  const a = order.indexOf(aId);
+  const b = order.indexOf(bId);
+  if (a < 0 || b < 0 || n <= 1) return 99;
+
+  const cw = (b - a + n) % n;
+  const ccw = (a - b + n) % n;
+  return Math.min(cw, ccw);
 }
 
-function normCardKey(raw: any) {
-  return String(raw ?? "")
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, "")
-    .replace(/[^a-z0-9_]/g, "");
+function effectiveDistance(me: any, target: any, base: number) {
+  let d = base;
+
+  if (hasEquip(target, "mustang")) d += 1;
+  if (String(target?.playcharacter ?? "") === "paul_regret") d += 1;
+
+  if (hasEquip(me, "scope")) d -= 1;
+  if (String(me?.playcharacter ?? "") === "rose_doolan") d -= 1;
+
+  return Math.max(1, d);
 }
 
-function isCharId(me: any, id: string) {
-  return String(me?.playcharacter ?? "").toLowerCase().trim() === id;
+function useNowTick(ms: number) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(t);
+  }, [ms]);
+  return now;
 }
 
-/** ================== COMPONENT ================== */
+function firstString(obj: any, keys: string[]) {
+  for (const key of keys) {
+    const v = String(obj?.[key] ?? "").trim();
+    if (v) return v;
+  }
+  return "";
+}
+
+function actionFocus(meta: any, meId?: string | null) {
+  const kind = String(meta?.kind ?? "").toLowerCase();
+  const targetId = firstString(meta, [
+    "toPlayerId",
+    "forPlayerId",
+    "responderId",
+    "respondingPlayerId",
+    "ownerId",
+    "targetId",
+    "victimId",
+    "playerId",
+    "pickerId",
+  ]);
+  if (!targetId) return { id: "", label: "" };
+
+  if (isCharacterAbilityKind(kind)) return { id: "", label: "" };
+  if (kind.includes("general_store")) return { id: targetId, label: "PICK" };
+  if (kind.includes("panic") || kind.includes("cat")) return { id: targetId, label: "TARGET" };
+  if (kind.includes("barrel")) return { id: targetId, label: "DECIDE" };
+  if (kind.includes("revive")) {
+    return { id: targetId, label: targetId === String(meId ?? "") ? "USE BEER" : "REVIVE" };
+  }
+  if (
+    kind.includes("duel") ||
+    kind.includes("indians") ||
+    kind.includes("gatling") ||
+    kind.includes("bang") ||
+    kind.includes("missed")
+  ) {
+    return { id: targetId, label: targetId === String(meId ?? "") ? "YOUR TURN" : "RESPOND" };
+  }
+  return { id: "", label: "" };
+}
+
+function isResponsePendingKind(p: any) {
+  const k = String(p?.kind ?? "").toLowerCase();
+  return (
+    k === "respond_to_bang" ||
+    k === "barrel_choice" ||
+    k === "choose_barrel" ||
+    k === "respond_to_duel" ||
+    k === "respond_to_indians" ||
+    k === "respond_to_gatling" ||
+    k === "respond_to_revive" ||
+    k === "bang" ||
+    k === "revive" ||
+    k === "need_missed" ||
+    k === "respond_missed" ||
+    k === "bang_missed" ||
+    k === "need_missed_for_bang" ||
+    k === "duel" ||
+    k === "duel_missed" ||
+    k === "need_missed_duel" ||
+    k === "duel_response" ||
+    k === "indians" ||
+    k === "gatling"
+  );
+}
+
+function isCharacterAbilityKind(kind: any) {
+  const k = String(kind ?? "").toLowerCase().trim();
+  return (
+    k === "choose_draw" ||
+    k === "draw_choice" ||
+    k === "choose_jesse_target" ||
+    k === "jesse_choice" ||
+    k === "choose_pedro_source" ||
+    k === "pedro_choice" ||
+    k === "choose_lucky_draw" ||
+    k === "lucky_choice"
+  );
+}
+
+function isRespondBadgeKind(kind: any) {
+  const k = String(kind ?? "").toLowerCase().trim();
+  return (
+    k === "respond_to_bang" ||
+    k === "bang" ||
+    k === "need_missed" ||
+    k === "respond_missed" ||
+    k === "bang_missed" ||
+    k === "need_missed_for_bang" ||
+    k === "respond_to_duel" ||
+    k === "duel" ||
+    k === "duel_missed" ||
+    k === "need_missed_duel" ||
+    k === "duel_response" ||
+    k === "respond_to_indians" ||
+    k === "indians" ||
+    k === "respond_to_gatling" ||
+    k === "gatling" ||
+    k === "respond_to_revive" ||
+    k === "revive"
+  );
+}
+
+function pendingAbilityOwnerId(src: any): string {
+  if (!src || typeof src !== "object") return "";
+  return String(
+    src?.playerId ??
+      src?.toPlayerId ??
+      src?.forPlayerId ??
+      src?.ownerId ??
+      src?.targetId ??
+      src?.pickerId ??
+      ""
+  ).trim();
+}
+
+function pendingUiKind(src: any): string {
+  const kind = String(src?.kind ?? "").toLowerCase().trim();
+  if (kind && kind !== "private" && kind !== "unknown") return kind;
+  return String(src?.privateKind ?? "").toLowerCase().trim();
+}
+
+function eventCardLike(msg: any): any | null {
+  const direct =
+    msg?.card ??
+    msg?.playedCard ??
+    msg?.discardTop ??
+    msg?.topDiscard ??
+    msg?.lastDiscard ??
+    msg?.pickedCard ??
+    null;
+
+  if (direct && typeof direct === "object") return direct;
+
+  const key = String(msg?.cardKey ?? msg?.key ?? msg?.name ?? "").trim();
+  const id = String(msg?.cardId ?? msg?.id ?? "").trim();
+  const rank = msg?.rank;
+  const suit = msg?.suit;
+
+  if (!key && !id && !rank && !suit) return null;
+
+  return {
+    id: id || undefined,
+    key: key || undefined,
+    name: key || undefined,
+    rank,
+    suit,
+    weaponKey: msg?.weaponKey,
+    weaponName: msg?.weaponName,
+    range: msg?.range,
+  };
+}
+
+const TABLE_STAY_KEYS = new Set(["jail", "dynamite", "barrel", "mustang", "scope", "weapon"]);
+
+function cardKeyOfAnyCard(card: any): string {
+  return String(card?.key ?? card?.cardKey ?? card?.name ?? "").toLowerCase().trim();
+}
+
+function isTableStayCard(card: any): boolean {
+  const key = cardKeyOfAnyCard(card);
+  if (TABLE_STAY_KEYS.has(key)) return true;
+  return !!String(card?.weaponKey ?? card?.weaponName ?? "").trim();
+}
+
+function shouldAnimatePlayedCardToDiscard(evt: any, card: any): boolean {
+  const action = String(evt?.action ?? "play").toLowerCase().trim();
+  if (action === "respond") return true;
+  return !isTableStayCard(card);
+}
+
+function shouldShowDiscardTopCard(card: any): boolean {
+  return !!card && typeof card === "object";
+}
+
+function buildDiscardStackFromEvents(list: any[]): any[] {
+  const stack: any[] = [];
+
+  const pushCard = (card: any) => {
+    if (!shouldShowDiscardTopCard(card)) return;
+    stack.push(card);
+  };
+
+  const popCard = () => {
+    if (!stack.length) return null;
+    return stack.pop() ?? null;
+  };
+
+  for (const e of Array.isArray(list) ? list : []) {
+    const t = String(e?.type ?? "");
+
+    if (t === "card_discarded") {
+      pushCard(eventCardLike(e?.card ?? e));
+      continue;
+    }
+
+    if (t === "action_resolved") {
+      const k = String(e?.kind ?? "").toLowerCase();
+      const sourceName = String(e?.source ?? e?.drawSource ?? "").toLowerCase();
+      const fromDiscard =
+        e?.fromDiscard === true ||
+        e?.useDiscard === true ||
+        e?.pickedDiscard === true ||
+        sourceName.includes("discard");
+
+      if (k.includes("pedro") && fromDiscard) {
+        popCard();
+      }
+    }
+  }
+
+  return stack;
+}
+
+function passiveLabel(kind: string) {
+  const k = kind.toLowerCase();
+  if (k.includes("gringo")) return "El Gringo";
+  if (k.includes("bart")) return "Bart";
+  if (k.includes("suzy")) return "Suzy";
+  if (k.includes("black")) return "Black Jack";
+  return "Draw";
+}
+
+function suitSymbol(suit?: any) {
+  const s = String(suit ?? "").toLowerCase();
+  if (s === "hearts") return "♥";
+  if (s === "diamonds") return "♦";
+  if (s === "spades") return "♠";
+  if (s === "clubs") return "♣";
+  return "";
+}
+
+
+function prettyRole(role?: any) {
+  return String(role ?? "unknown")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function prettyCharacterName(key?: any) {
+  return String(key ?? "character")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function prettyWeaponName(raw?: any) {
+  const key = String(raw ?? "colt45").trim().toLowerCase();
+  if (!key) return "Colt .45";
+  if (key === "colt45" || key === "colt_45") return "Colt .45";
+  if (key === "rev_carabine" || key === "revcarabine" || key === "carabine") return "Rev. Carabine";
+  return key
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function shortCardBadge(card: any) {
+  if (!card || typeof card !== "object") return "";
+  const rank = String(card.rank ?? "").toUpperCase();
+  const sym = suitSymbol(card.suit);
+  return `${rank}${sym}`.trim();
+}
+
+function TimerBadge({
+  phase,
+  turnEndsAt,
+  pendingEndsAt,
+  pendingKind,
+}: {
+  phase: any;
+  turnEndsAt: number | null;
+  pendingEndsAt: number | null;
+  pendingKind?: string | null;
+}) {
+  const now = useNowTick(250);
+  const k = String(pendingKind ?? "").toLowerCase();
+  const sharesTurnDeadline =
+    !!turnEndsAt &&
+    !!pendingEndsAt &&
+    Math.abs(Number(turnEndsAt) - Number(pendingEndsAt)) <= 1500;
+  const usesTurnClock =
+    k === "discard_limit" ||
+    k === "discard_to_limit" ||
+    isCharacterAbilityKind(k) ||
+    k === "lucky_choice" ||
+    (!k && sharesTurnDeadline);
+  const isAction = String(phase) === "waiting" && !usesTurnClock;
+  const endsAt = String(phase) === "waiting" ? (usesTurnClock ? turnEndsAt ?? pendingEndsAt ?? null : pendingEndsAt ?? null) : turnEndsAt ?? null;
+  if (!endsAt) return null;
+
+  const sec = Math.max(0, Math.ceil((endsAt - now) / 1000));
+
+  return (
+    <View style={[s.timerBox, isAction ? s.timerBoxAction : null]}>
+      <Text style={[s.timerKicker, isAction ? s.timerKickerAction : null]}>{isAction ? "ACTION" : "TURN"}</Text>
+      <Text style={s.timerText}>{sec}s</Text>
+    </View>
+  );
+}
 
 export default function GameScreen() {
-  const ctx = usePlayer();
-  const { width, height } = useWindowDimensions();
-
   const {
     roomCode,
     players,
+    discardCount,
+    deckCount,
     me,
-    turnPlayerId,
-    wsStatus,
-    sendWS,
     phase,
     pending,
+    actionRequired,
+    lastPassive,
+    events,
+    chats,
+    turnPlayerId,
     turnEndsAt,
     pendingEndsAt,
-  } = ctx as any;
+    sendWS,
+    leaveRoom,
+    gameOver,
+    clearGameOver,
+    resetAll,
+  } = usePlayer();
 
-  /** ✅ لازم كل الـHooks تكون قبل أي return شرطي */
-  const isSmall = height < 740;
-  const BOARD_H = isSmall ? 190 : 220;
-  const OPP_H = isSmall ? 112 : 130;
+  const navigation = useNavigation<any>();
 
-  /** ============ WS SEND ============ */
-  const sendGameWS = (payload: any) => {
-    if (wsStatus !== "open") return;
-    if (!roomCode) return;
-    sendWS({ ...payload, roomCode });
-  };
+  useAmbientMusic("game", !!roomCode && !gameOver);
+  useGameSounds(events as any[], gameOver as any, String((me as any)?.id ?? ""), chats as any[]);
 
-  /** ============ PLAYERS ORDER ============ */
-  const ordered = useMemo(() => {
-    if (!me) return players ?? [];
-    return rotateToMe(players ?? [], me.id);
-  }, [players, me]);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [seenChatCount, setSeenChatCount] = useState(0);
+  const chatFabFloat = useRef(new Animated.Value(0)).current;
 
-  const others = useMemo(() => {
-    if (!me) return [];
-    return ordered.filter((p: any) => p.id !== me.id);
-  }, [ordered, me]);
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(chatFabFloat, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(chatFabFloat, { toValue: 0, duration: 900, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [chatFabFloat]);
 
-  /** ============ OPPONENT SELECT ============ */
-  const listRef = useRef<FlatList<any>>(null);
-  const [selectedOpponentId, setSelectedOpponentId] = useState<string | null>(null);
+  useEffect(() => {
+    if (chatOpen) setSeenChatCount(Array.isArray(chats) ? chats.length : 0);
+  }, [chatOpen, chats]);
 
-  const selectedOpponent = useMemo(() => {
-    if (!selectedOpponentId) return null;
-    return (players ?? []).find((p: any) => p.id === selectedOpponentId) ?? null;
-  }, [players, selectedOpponentId]);
+  const unreadChatCount = Math.max(0, (Array.isArray(chats) ? chats.length : 0) - seenChatCount);
+  const [introDismissedRoom, setIntroDismissedRoom] = useState("");
 
-  const selectedOpponentIndex = useMemo(() => {
-    if (!selectedOpponentId) return 0;
-    const i = others.findIndex((p: any) => p.id === selectedOpponentId);
-    return i < 0 ? 0 : i;
-  }, [selectedOpponentId, others]);
+  useEffect(() => {
+    if (!roomCode) setIntroDismissedRoom("");
+  }, [roomCode]);
 
-  const goPrev = () => {
-    if (!others.length) return;
-    const next = Math.max(0, selectedOpponentIndex - 1);
-    const id = others[next].id;
-    setSelectedOpponentId(id);
-    listRef.current?.scrollToIndex({ index: next, animated: true, viewPosition: 0.5 });
-  };
+  const uiPending: any = useMemo(() => {
+    const ar: any = actionRequired ?? null;
+    const pub: any = pending ?? null;
+    const arKind = String(ar?.kind ?? "").toLowerCase();
+    const pubKind = String(pub?.kind ?? "").toLowerCase();
+    const pubPrivateKind = String((pub as any)?.privateKind ?? "").toLowerCase();
+    const pubSource = String((pub as any)?.__source ?? "").toLowerCase();
+    const myId = String((me as any)?.id ?? "");
 
-  const goNext = () => {
-    if (!others.length) return;
-    const next = Math.min(others.length - 1, selectedOpponentIndex + 1);
-    const id = others[next].id;
-    setSelectedOpponentId(id);
-    listRef.current?.scrollToIndex({ index: next, animated: true, viewPosition: 0.5 });
-  };
+    if (arKind === "choose_general_store" && pubKind === "general_store") {
+      const pickerId = String(pub?.pickerId ?? "");
+      if (pickerId && myId && pickerId !== myId) return pub;
 
-  /** ============ HAND SELECT (single + multi) ============ */
-  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-  const [multiIds, setMultiIds] = useState<Set<string>>(new Set());
+      const cards = Array.isArray(ar?.cards)
+        ? ar.cards
+        : Array.isArray(pub?.offered)
+        ? pub.offered
+        : [];
 
-  const myHand: Card[] = (me?.hand ?? []) as any[];
-
-  const selectedCard = useMemo(() => {
-    if (!me || !selectedCardId) return null;
-    return myHand.find((c: any) => c.id === selectedCardId) ?? null;
-  }, [me, selectedCardId, myHand]);
-
-  const isCalamity = useMemo(() => isCharId(me, "calamity_janet"), [me]);
-  const isSid = useMemo(() => isCharId(me, "sid_ketchum"), [me]);
-
-  const selectedKey = useMemo(() => normCardKey((selectedCard as any)?.key), [selectedCard]);
-
-  const needsTarget = useMemo(() => {
-    if (!selectedCard) return false;
-    if (selectedKey === "bang") return true;
-    if (selectedKey === "panic") return true;
-    if (selectedKey === "catbalou") return true;
-    if (selectedKey === "duel") return true;
-    if (selectedKey === "jail") return true;
-    if (isCalamity && selectedKey === "missed") return true;
-    return false;
-  }, [selectedCard, selectedKey, isCalamity]);
-
-  const isMyTurn = !!me && turnPlayerId === me.id;
-
-  const canPlaySelected = useMemo(() => {
-    if (!selectedCardId) return false;
-    if (!isMyTurn) return false;
-    if (phase !== "main") return false;
-    if (needsTarget && !selectedOpponentId) return false;
-    return true;
-  }, [isMyTurn, selectedCardId, needsTarget, selectedOpponentId, phase]);
-
-  /** ============ PEEK MODAL (tap to zoom) ============ */
-  const [peekOpen, setPeekOpen] = useState(false);
-  const [peekSrc, setPeekSrc] = useState<any | null>(null);
-  const [peekTitle, setPeekTitle] = useState<string>("");
-
-  const openPeekByCard = (c: any) => {
-    if (!c) return;
-    const src = safeCardImage(c);
-    setPeekSrc(src ?? CARD_BACK);
-    setPeekTitle(cardLabel(c) || "CARD");
-    setPeekOpen(true);
-  };
-
-  const openPeekByImage = (src: any, title: string) => {
-    if (!src) return;
-    setPeekSrc(src);
-    setPeekTitle(title || "");
-    setPeekOpen(true);
-  };
-
-  const closePeek = () => {
-    setPeekOpen(false);
-    setPeekSrc(null);
-    setPeekTitle("");
-  };
-
-  /** ============ ACTIONS ============ */
-  const endTurn = () => {
-    if (!isMyTurn) return;
-    if (phase !== "main") return;
-    sendGameWS({ type: "end_turn" });
-  };
-
-  const playSelected = () => {
-    if (!selectedCardId) return;
-    if (!isMyTurn) return;
-    if (phase !== "main") return;
-
-    const payload: any = { type: "play_card", cardId: selectedCardId };
-    if (needsTarget && selectedOpponentId) payload.targetId = selectedOpponentId;
-
-    sendGameWS(payload);
-    setSelectedCardId(null);
-  };
-
-  /** ============ PENDING / RESPONSE / CHOICES ============ */
-  const pKind = normPendingKind(pending);
-  const isWaiting = phase === "waiting";
-
-  const pendingCurrentTargetId = useMemo(() => {
-    if (!pending) return null;
-    const arr = pending?.targets;
-    const idx = pending?.idx;
-    if (!Array.isArray(arr)) return null;
-    const i = Number(idx);
-    if (!Number.isFinite(i) || i < 0 || i >= arr.length) return null;
-    return arr[i] ?? null;
-  }, [pending]);
-
-  const iAmActor = useMemo(() => {
-    if (!me) return false;
-    if (!isWaiting) return false;
-
-    if (pKind.startsWith("respond_to_")) return true;
-    if (includesAny(pKind, ["choose_draw", "choose_pedro_source", "choose_jesse_target", "discard_to_limit"]))
-      return true;
-
-    if (pending?.playerId && pending.playerId === me.id) return true;
-    if (pending?.targetId && pending.targetId === me.id) return true;
-    if (pending?.toPlayerId && pending.toPlayerId === me.id) return true;
-    if (pending?.responderId && pending.responderId === me.id) return true;
-
-    if ((pKind === "indians" || pKind === "gatling") && pendingCurrentTargetId === me.id) return true;
-
-    return false;
-  }, [me, isWaiting, pKind, pending, pendingCurrentTargetId]);
-
-  const isRespondBang = useMemo(() => {
-    if (!me || !isWaiting) return false;
-    if (pKind === "bang" && pending?.targetId === me.id) return true;
-    if (pKind.includes("respond_to_bang")) return true;
-    return false;
-  }, [me, isWaiting, pKind, pending]);
-
-  const isRespondIndians = useMemo(() => {
-    if (!me || !isWaiting) return false;
-    if (pKind.includes("respond_to_indians")) return true;
-    if (pKind === "indians" && pendingCurrentTargetId === me.id) return true;
-    return false;
-  }, [me, isWaiting, pKind, pendingCurrentTargetId]);
-
-  const isRespondGatling = useMemo(() => {
-    if (!me || !isWaiting) return false;
-    if (pKind.includes("respond_to_gatling")) return true;
-    if (pKind === "gatling" && pendingCurrentTargetId === me.id) return true;
-    return false;
-  }, [me, isWaiting, pKind, pendingCurrentTargetId]);
-
-  const isRespondDuel = useMemo(() => {
-    if (!me || !isWaiting) return false;
-    if (pKind.includes("respond_to_duel")) return true;
-    if (pKind === "duel" && pending?.responderId === me.id) return true;
-    return false;
-  }, [me, isWaiting, pKind, pending]);
-
-  const isChooseDraw = useMemo(
-    () => isWaiting && includesAny(pKind, ["choose_draw", "draw_choice", "kit"]),
-    [isWaiting, pKind]
-  );
-  const isChoosePedro = useMemo(
-    () => isWaiting && includesAny(pKind, ["choose_pedro_source", "pedro_choice", "pedro"]),
-    [isWaiting, pKind]
-  );
-  const isChooseJesse = useMemo(
-    () => isWaiting && includesAny(pKind, ["choose_jesse_target", "jesse_choice", "jesse"]),
-    [isWaiting, pKind]
-  );
-  const isDiscardToLimit = useMemo(
-    () => isWaiting && includesAny(pKind, ["discard_to_limit", "discard_limit", "hand_limit"]),
-    [isWaiting, pKind]
-  );
-
-  const missedCardId = useMemo(() => {
-    const m = myHand.find((x: any) => normCardKey(x?.key) === "missed");
-    if (m) return m.id ?? null;
-
-    if (isCalamity) {
-      const b = myHand.find((x: any) => normCardKey(x?.key) === "bang");
-      return b?.id ?? null;
+      return {
+        ...pub,
+        ...ar,
+        kind: "choose_general_store",
+        pickerId: pickerId || myId || String(ar?.pickerId ?? ""),
+        cards,
+      };
     }
-    return null;
-  }, [myHand, isCalamity]);
 
-  const bangCardId = useMemo(() => {
-    const b = myHand.find((x: any) => normCardKey(x?.key) === "bang");
-    if (b) return b.id ?? null;
-
-    if (isCalamity) {
-      const m = myHand.find((x: any) => normCardKey(x?.key) === "missed");
-      return m?.id ?? null;
-    }
-    return null;
-  }, [myHand, isCalamity]);
-
-  const respondWithCard = (cardId: string) => sendGameWS({ type: "respond", cardId });
-  const respondPass = () => sendGameWS({ type: "respond" });
-
-  const chooseDrawOptions: any[] = useMemo(() => {
-    const opt = pending?.offered ?? pending?.options ?? pending?.cards ?? pending?.candidates ?? null;
-    if (Array.isArray(opt)) return opt;
-    return [];
-  }, [pending]);
-
-  const chooseDrawPickCount = useMemo(() => {
-    const k = Number(pending?.pickCount ?? 2);
-    return Number.isFinite(k) && k > 0 ? k : 2;
-  }, [pending]);
-
-  const chooseDrawSelectedIds = useMemo(() => Array.from(multiIds), [multiIds]);
-  const chooseDrawCanConfirm = chooseDrawSelectedIds.length === chooseDrawPickCount;
-
-  const confirmChooseDraw = () => {
-    if (!chooseDrawCanConfirm) return;
-    sendGameWS({ type: "choose_draw", cardIds: chooseDrawSelectedIds });
-    setMultiIds(new Set());
-  };
-
-  const canPedroDiscard = useMemo(() => {
-    const v = pending?.canUseDiscard;
-    if (typeof v === "boolean") return v;
-    return !!pending?.canUseDiscard;
-  }, [pending]);
-
-  const choosePedro = (source: "deck" | "discard") => {
-    if (source === "discard" && !canPedroDiscard) return;
-    sendGameWS({ type: "choose_pedro_source", source });
-  };
-
-  const eligibleJesseTargets: string[] = useMemo(() => {
-    const arr = pending?.eligibleTargets;
-    if (Array.isArray(arr)) return arr.map(String);
-    return [];
-  }, [pending]);
-
-  const chooseJesse = (targetId?: string) => {
-    sendGameWS({ type: "choose_jesse_target", targetId });
-  };
-
-  const requiredDiscardCount = useMemo(() => {
-    const fromPending = Number(pending?.requiredCount ?? pending?.count ?? pending?.need ?? pending?.required ?? NaN);
-    if (Number.isFinite(fromPending) && fromPending >= 0) return fromPending;
-
-    const hp = Number(me?.hp ?? 0);
-    return Math.max(0, myHand.length - hp);
-  }, [pending, me, myHand.length]);
-
-  const discardSelectedIds = useMemo(() => Array.from(multiIds), [multiIds]);
-  const discardCanConfirm = discardSelectedIds.length === requiredDiscardCount;
-
-  const confirmDiscardToLimit = () => {
-    if (!discardCanConfirm) return;
-    sendGameWS({ type: "discard_to_limit", cardIds: discardSelectedIds });
-    setMultiIds(new Set());
-  };
-
-  /** ============ SID HEAL ============ */
-  const [sidMode, setSidMode] = useState(false);
-
-  const canOpenSidMode = useMemo(() => {
-    if (!isSid) return false;
-    if (phase !== "main") return false;
-    if (!me?.isAlive) return false;
-    if (Number(me?.hp ?? 0) >= Number(me?.maxHp ?? 0)) return false;
-    if ((myHand?.length ?? 0) < 2) return false;
-    return true;
-  }, [isSid, phase, me, myHand?.length]);
-
-  const sidSelectedIds = useMemo(() => Array.from(multiIds), [multiIds]);
-  const sidCanConfirm = sidSelectedIds.length === 2;
-
-  const confirmSidHeal = () => {
-    if (!sidCanConfirm) return;
-    sendGameWS({ type: "sid_heal", cardIds: sidSelectedIds });
-    setMultiIds(new Set());
-    setSidMode(false);
-  };
-
-  /** ============ MULTI MODE ============ */
-  const multiMode = isChooseDraw || isDiscardToLimit || sidMode;
-
-  const toggleMulti = useCallback((id: string, max: number) => {
-    setMultiIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-        return next;
+    if (pub && pubSource === "game_state") {
+      if (pubKind === "private") {
+        if (isCharacterAbilityKind(pubPrivateKind)) return null;
+        if (isResponsePendingKind({ kind: pubPrivateKind })) return { ...(pub as any), kind: pubPrivateKind };
+        return null;
       }
-      if (next.size >= max) return next;
-      next.add(id);
-      return next;
-    });
-  }, []);
 
-  const clearMulti = () => setMultiIds(new Set());
+      if (isResponsePendingKind(pub)) {
+        return ar ?? null;
+      }
+    }
+
+    return ar ?? pub ?? null;
+  }, [actionRequired, pending, me]);
+
+  const personalPending: any = useMemo(() => {
+    const myId = String((me as any)?.id ?? "").trim();
+
+    const ar: any = actionRequired ?? null;
+    if (ar) {
+      const ownerId = String(
+        ar?.toPlayerId ??
+          ar?.forPlayerId ??
+          ar?.responderId ??
+          ar?.respondingPlayerId ??
+          ar?.ownerId ??
+          ar?.targetId ??
+          ar?.victimId ??
+          ""
+      ).trim();
+
+      if (ownerId && myId && ownerId !== myId) return null;
+      return { ...ar, __source: "action_required" };
+    }
+
+    const p: any = pending ?? null;
+    if (!p) return null;
+
+    const k = String(p?.kind ?? "").toLowerCase();
+    if (k === "general_store") return null;
+
+    const src = String((p as any)?.__source ?? "").toLowerCase();
+    const isResponseLike =
+      k === "respond_to_bang" ||
+      k === "barrel_choice" ||
+      k === "choose_barrel" ||
+      k === "respond_to_duel" ||
+      k === "respond_to_indians" ||
+      k === "respond_to_gatling" ||
+      k === "respond_to_revive" ||
+      k === "bang" ||
+      k === "revive" ||
+      k === "need_missed" ||
+      k === "respond_missed" ||
+      k === "bang_missed" ||
+      k === "need_missed_for_bang" ||
+      k === "duel" ||
+      k === "duel_missed" ||
+      k === "need_missed_duel" ||
+      k === "duel_response" ||
+      k === "indians" ||
+      k === "gatling";
+
+    if (isResponseLike) {
+      if (src === "game_state") return null;
+
+      const ownerId = String(
+        (p as any)?.toPlayerId ??
+          (p as any)?.forPlayerId ??
+          (p as any)?.responderId ??
+          (p as any)?.respondingPlayerId ??
+          (p as any)?.ownerId ??
+          (p as any)?.targetId ??
+          (p as any)?.victimId ??
+          ""
+      ).trim();
+
+      if (!myId) return null;
+      if (!ownerId) return null;
+      if (ownerId !== myId) return null;
+    }
+
+    return p;
+  }, [actionRequired, pending, me]);
+
+
+  const activeFocus = useMemo(() => {
+    const myId = String((me as any)?.id ?? "");
+    const privateKind = String((pending as any)?.privateKind ?? "").toLowerCase();
+    const publicAbilityPending =
+      pending &&
+      String((pending as any)?.__source ?? "").toLowerCase() === "game_state" &&
+      isCharacterAbilityKind(privateKind)
+        ? { ...(pending as any), kind: privateKind }
+        : null;
+
+    const resolvedPendingKind = pendingUiKind(pending);
+    const pendingIsPrivatePublic =
+      pending &&
+      String((pending as any)?.__source ?? "").toLowerCase() === "game_state" &&
+      (isResponsePendingKind({ ...(pending as any), kind: resolvedPendingKind }) ||
+        (!resolvedPendingKind && String((pending as any)?.kind ?? "").toLowerCase() === "unknown"));
+    const publicPending = pendingIsPrivatePublic ? publicAbilityPending : pending;
+    const direct = actionFocus(actionRequired ?? personalPending ?? publicAbilityPending ?? uiPending ?? publicPending ?? null, myId);
+    if (direct.id) return direct;
+    return { id: "", label: "" };
+  }, [actionRequired, personalPending, uiPending, pending, me]);
+
+  const respondingFocus = useMemo(() => {
+    const publicResponsePending =
+      pending &&
+      String((pending as any)?.__source ?? "").toLowerCase() === "game_state"
+        ? (() => {
+            const resolvedKind = pendingUiKind(pending);
+            if (!resolvedKind) return null;
+            if (!isResponsePendingKind({ ...(pending as any), kind: resolvedKind })) return null;
+            return { ...(pending as any), kind: resolvedKind };
+          })()
+        : null;
+    const src: any = actionRequired ?? personalPending ?? publicResponsePending ?? uiPending ?? null;
+    const k = pendingUiKind(src);
+    if (!k || !isRespondBadgeKind(k) || isCharacterAbilityKind(k) || k === "discard_limit" || k === "discard_to_limit") {
+      return { id: "", label: "" };
+    }
+
+    const idx = Number(src?.idx ?? src?.currentIndex ?? -1);
+    const order = Array.isArray(src?.order) ? src.order : Array.isArray(src?.targets) ? src.targets : null;
+    const direct = String(src?.toPlayerId ?? src?.forPlayerId ?? src?.responderId ?? src?.respondingPlayerId ?? src?.playerId ?? src?.targetId ?? "");
+    let id = direct;
+    if (!id && order && idx >= 0 && idx < order.length) id = String(order[idx] ?? "");
+
+    if (!id) return { id: "", label: "" };
+    return { id, label: k.includes("revive") ? "REVIVE" : "RESPOND" };
+  }, [pending, uiPending, actionRequired, personalPending]);
+
+  const myRole = String((me as any)?.role ?? "");
+
+  const confirmDisconnect = useCallback(() => {
+    Alert.alert(
+      "Disconnect?",
+      "Are you sure you want to disconnect?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Disconnect",
+          style: "destructive",
+          onPress: () => {
+            leaveRoom();
+            resetAll();
+            navigation.reset({ index: 0, routes: [{ name: "Home" }] });
+          },
+        },
+      ]
+    );
+  }, [leaveRoom, resetAll, navigation]);
+
+  const backHomeFromGameOver = useCallback(() => {
+    clearGameOver();
+    leaveRoom();
+    resetAll();
+    navigation.reset({ index: 0, routes: [{ name: "Home" }] });
+  }, [clearGameOver, leaveRoom, resetAll, navigation]);
+
+  const { width: WIN_W, height: WIN_H } = useWindowDimensions();
+  const isLandscape = WIN_W > WIN_H;
+
+  const [chatFabPos, setChatFabPos] = useState({ x: 0, y: 0 });
+  const chatFabPosRef = useRef({ x: 0, y: 0 });
+  const chatMovedRef = useRef(false);
+  const chatDragStartRef = useRef({ x: 0, y: 0 });
+
+  const clampChatPos = useCallback((x: number, y: number) => ({
+    x: Math.min(Math.max(10, x), Math.max(10, WIN_W - 104)),
+    y: Math.min(Math.max(92, y), Math.max(92, WIN_H - 84)),
+  }), [WIN_W, WIN_H]);
 
   useEffect(() => {
-    setMultiIds(new Set());
-  }, [isChooseDraw, isDiscardToLimit, sidMode]);
-
-  useEffect(() => {
-    if (isWaiting) setSidMode(false);
-  }, [isWaiting]);
-
-  /** ============ TIMER ============ */
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 200);
-    return () => clearInterval(id);
-  }, []);
-
-  const activeEndsAt = isWaiting ? pendingEndsAt : turnEndsAt;
-
-  const secondsLeft = useMemo(() => {
-    if (!activeEndsAt || activeEndsAt <= 0) return 0;
-    const msLeft = Math.max(0, activeEndsAt - now);
-    return Math.ceil(msLeft / 1000);
-  }, [activeEndsAt, now]);
-
-  const timerLabel = isWaiting ? "ACTION" : "TURN";
-
-  /** ============ DECK/DISCARD + DRAW ANIMATION ============ */
-  const [flyVisible, setFlyVisible] = useState(false);
-  const flyT = useRef(new Animated.Value(0)).current;
-  const prevHandLenRef = useRef<number>(0);
-
-  const triggerDrawAnim = useCallback(() => {
-    setFlyVisible(true);
-    flyT.stopAnimation();
-    flyT.setValue(0);
-    Animated.timing(flyT, {
-      toValue: 1,
-      duration: 420,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start(() => {
-      setFlyVisible(false);
-      flyT.setValue(0);
-    });
-  }, [flyT]);
-
-  useEffect(() => {
-    const cur = myHand.length;
-    const prev = prevHandLenRef.current;
-
-    // أول مرة ما نعمل أنيميشن
-    if (prev === 0) {
-      prevHandLenRef.current = cur;
+    const seeded = chatFabPosRef.current.x || chatFabPosRef.current.y;
+    if (!seeded) {
+      const next = clampChatPos(WIN_W - 104, WIN_H - 210);
+      chatFabPosRef.current = next;
+      setChatFabPos(next);
       return;
     }
 
-    if (cur > prev) triggerDrawAnim();
-    prevHandLenRef.current = cur;
-  }, [myHand.length, triggerDrawAnim]);
+    const next = clampChatPos(chatFabPosRef.current.x, chatFabPosRef.current.y);
+    chatFabPosRef.current = next;
+    setChatFabPos(next);
+  }, [WIN_W, WIN_H, clampChatPos]);
 
-  const flyX = flyT.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, -(width * 0.45)],
-  });
-  const flyY = flyT.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, height * 0.55],
-  });
-  const flyS = flyT.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.85, 1.05],
-  });
-  const flyA = flyT.interpolate({
-    inputRange: [0, 0.2, 1],
-    outputRange: [0, 1, 0],
-  });
+  const chatPanResponder = useMemo(() =>
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        chatMovedRef.current = false;
+        chatDragStartRef.current = { ...chatFabPosRef.current };
+      },
+      onPanResponderMove: (_evt, gesture) => {
+        if (Math.abs(gesture.dx) > 4 || Math.abs(gesture.dy) > 4) chatMovedRef.current = true;
+        const next = clampChatPos(chatDragStartRef.current.x + gesture.dx, chatDragStartRef.current.y + gesture.dy);
+        chatFabPosRef.current = next;
+        setChatFabPos(next);
+      },
+      onPanResponderRelease: (_evt, gesture) => {
+        const tapped = !chatMovedRef.current && Math.abs(gesture.dx) < 6 && Math.abs(gesture.dy) < 6;
+        if (tapped) setChatOpen((v) => !v);
+      },
+    }),
+  [clampChatPos]);
 
-  /** ============ BOARD DATA (بدون Hooks) ============ */
-  const boardPlayer = selectedOpponent ?? me;
-  const boardChar = getCharacterSafe(String(boardPlayer?.playcharacter ?? ""));
-  const boardWeaponCard = findEquippedWeaponCard(boardPlayer?.equipment);
-  const boardBlueCard = pickFirstBlueEquipment(boardPlayer?.equipment);
-  const boardWeaponKey: WeaponKey =
-    (boardPlayer?.weaponKey as WeaponKey) ?? weaponFromEquipment(boardPlayer?.equipment ?? []);
+  const tableH = isLandscape
+    ? Math.max(322, Math.floor(WIN_H * 0.52))
+    : Math.max(252, Math.floor(WIN_H * 0.31));
 
-  const showBoardRole = boardPlayer?.id === me?.id || boardPlayer?.role === "sheriff";
-  const boardRoleImg = showBoardRole ? (ROLE_IMAGES as any)[boardPlayer?.role] ?? null : null;
-  const boardIsMe = boardPlayer?.id === me?.id;
+  const [localPick, setLocalPick] = useState<
+    | null
+    | {
+        kind: "panic" | "cat_balou";
+        cardId: string;
+        targetId: string;
+        handCount: number;
+        equipment: any[];
+      }
+  >(null);
 
-  /** ============ EARLY RENDER WHEN NO ME (بعد كل الـHooks) ============ */
-  if (!me) {
-    return (
-      <ImageBackground source={require("../../assets/homescreen3.png")} style={{ flex: 1 }} resizeMode="cover">
-        <SafeAreaView style={{ flex: 1 }}>
-          <View style={[styles.root, { justifyContent: "center", alignItems: "center" }]}>
-            <Text style={{ color: "white" }}>Loading…</Text>
-          </View>
-        </SafeAreaView>
-      </ImageBackground>
+  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
+  const [selectedStoreCardId, setSelectedStoreCardId] = useState<string | null>(null);
+
+  const [sidMode, setSidMode] = useState(false);
+  const [sidSelectedIds, setSidSelectedIds] = useState<Set<string>>(new Set());
+  const [discardSelectedIds, setDiscardSelectedIds] = useState<Set<string>>(new Set());
+  const [respondSelectedIds, setRespondSelectedIds] = useState<Set<string>>(new Set());
+
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [abilityOpen, setAbilityOpen] = useState(false);
+
+  const rootRef = useRef<View | null>(null);
+  const [rootOffset, setRootOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [anchors, setAnchors] = useState<Record<string, { x: number; y: number }>>({});
+
+  const [drawMotions, setDrawMotions] = useState<DrawMotionEvent[]>([]);
+  const [discardTopCard, setDiscardTopCard] = useState<any | null>(null);
+  const discardStackRef = useRef<any[]>([]);
+  const [drawCheckOverlayEvent, setDrawCheckOverlayEvent] = useState<any | null>(null);
+  const [barrelChoiceBusy, setBarrelChoiceBusy] = useState(false);
+
+  const myCharacterKey = String(((me as any)?.characterKey ?? (me as any)?.playcharacter ?? "")).toLowerCase().trim();
+  const showStartInfo = !!roomCode && !!myRole && myRole !== "unknown" && !!myCharacterKey && introDismissedRoom !== roomCode;
+  const abilityNeedsAttention = useMemo(
+    () =>
+      getNeedsAttention({
+        characterKey: myCharacterKey,
+        me: me as any,
+        pending: personalPending as any,
+        sidMode,
+        sidSelectedIds,
+      }),
+    [myCharacterKey, me, personalPending, sidMode, sidSelectedIds]
+  );
+
+  const abilityPendingKind = String((personalPending as any)?.kind ?? "").toLowerCase().trim();
+  const abilityPendingToken = useMemo(() => {
+    if (!isCharacterAbilityKind(abilityPendingKind)) return "";
+    return [
+      myCharacterKey,
+      abilityPendingKind,
+      String((personalPending as any)?.playerId ?? (me as any)?.id ?? ""),
+      String((personalPending as any)?.pendingEndsAt ?? pendingEndsAt ?? ""),
+    ].join("|");
+  }, [abilityPendingKind, myCharacterKey, personalPending, me, pendingEndsAt]);
+  const autoAbilityCharacter = myCharacterKey === "lucky_duke";
+  const trackedAbilityTokenRef = useRef("");
+
+  useEffect(() => {
+    if (!abilityPendingToken) {
+      if (trackedAbilityTokenRef.current) {
+        trackedAbilityTokenRef.current = "";
+        setAbilityOpen(false);
+      }
+      return;
+    }
+
+    if (!autoAbilityCharacter) return;
+
+    trackedAbilityTokenRef.current = abilityPendingToken;
+    setAbilityOpen(true);
+  }, [abilityPendingToken, autoAbilityCharacter]);
+
+  const hasBeerInHand = useMemo(() => {
+    const hand: any[] = Array.isArray((me as any)?.hand) ? (me as any).hand : [];
+    return hand.some((card: any) => String(card?.key ?? card?.name ?? "").toLowerCase() === "beer");
+  }, [me]);
+
+  const reviveAutoPassRef = useRef("");
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      try {
+        (rootRef.current as any)?.measureInWindow?.((x: number, y: number) =>
+          setRootOffset({ x, y })
+        );
+      } catch {}
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [WIN_W, WIN_H]);
+
+  const onAnchor = useCallback(
+    (playerId: string, pt: { x: number; y: number }) => {
+      const id = String(playerId);
+      if (!id) return;
+      const local = { x: pt.x - rootOffset.x, y: pt.y - rootOffset.y };
+
+      setAnchors((prev) => {
+        const cur = prev[id];
+        if (cur && Math.abs(cur.x - local.x) < 0.5 && Math.abs(cur.y - local.y) < 0.5) return prev;
+        return { ...prev, [id]: local };
+      });
+    },
+    [rootOffset.x, rootOffset.y]
+  );
+
+  const pushDrawMotion = useCallback(
+    (
+      fromId: string,
+      toId: string,
+      extra?: Partial<Pick<DrawMotionEvent, "delayMs" | "faceUpCard" | "label">>
+    ) => {
+      if (!fromId || !toId) return;
+      setDrawMotions((prev) => {
+        const next: DrawMotionEvent = {
+          id: `draw_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+          at: Date.now(),
+          fromId,
+          toId,
+          delayMs: extra?.delayMs,
+          faceUpCard: extra?.faceUpCard,
+          label: extra?.label,
+        };
+        return [...prev, next].slice(-18);
+      });
+    },
+    []
+  );
+
+  const removeDrawMotion = useCallback((id: string) => {
+    setDrawMotions((prev) => prev.filter((x) => x.id !== id));
+  }, []);
+
+  const [fx, setFx] = useState<FxEvent[]>([]);
+  const onAddFx = useCallback((kind: FxKind, data?: Partial<FxEvent>) => {
+    setFx((prev) => {
+      const e: FxEvent = {
+        id: `fx_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        kind,
+        at: Date.now(),
+        ...(data ?? {}),
+      };
+      return [...prev, e].slice(-40);
+    });
+  }, []);
+
+  const onFxDone = useCallback((id: string) => {
+    setFx((prev) => prev.filter((e) => e.id !== id));
+  }, []);
+
+  const lastEvtIdRef = useRef<string | null>(null);
+  const syncDiscardTopFromStack = useCallback(() => {
+    const stack = discardStackRef.current;
+    setDiscardTopCard(stack.length ? stack[stack.length - 1] : null);
+  }, []);
+
+  useEffect(() => {
+    const list = Array.isArray(events) ? events : [];
+    if (!list.length) return;
+
+    let startIdx = 0;
+    if (lastEvtIdRef.current) {
+      const idx = list.findIndex((e: any) => String(e?.id) === String(lastEvtIdRef.current));
+      startIdx = idx >= 0 ? idx + 1 : Math.max(0, list.length - 15);
+    } else {
+      startIdx = Math.max(0, list.length - 15);
+    }
+
+    if (!lastEvtIdRef.current) {
+      discardStackRef.current = buildDiscardStackFromEvents(list.slice(0, startIdx));
+      syncDiscardTopFromStack();
+    }
+
+    const pushDiscardCard = (card: any) => {
+      if (!shouldShowDiscardTopCard(card)) return;
+      discardStackRef.current = [...discardStackRef.current, card];
+      syncDiscardTopFromStack();
+    };
+
+    const popDiscardCard = () => {
+      const stack = [...discardStackRef.current];
+      const popped = stack.pop() ?? null;
+      discardStackRef.current = stack;
+      syncDiscardTopFromStack();
+      return popped;
+    };
+
+    const fresh = list.slice(startIdx);
+
+    for (const e of fresh) {
+      const t = String(e?.type ?? "");
+
+      if (t === "card_played") {
+        const ck = String(e?.cardKey ?? "").toLowerCase();
+        const fromId = String(e?.playerId ?? "");
+        const targetId = String(e?.targetId ?? "");
+
+        const topCard = eventCardLike(e);
+        const shouldGoDiscard = shouldAnimatePlayedCardToDiscard(e, topCard);
+
+        if (fromId && targetId && ["bang", "duel", "panic", "cat_balou", "catbalou", "jail"].includes(ck)) {
+          pushDrawMotion(fromId, targetId, {
+            faceUpCard: topCard ?? undefined,
+            label: ck.replace(/_/g, " ").toUpperCase(),
+          });
+        }
+
+        if (fromId && topCard && shouldGoDiscard) {
+          pushDrawMotion(fromId, "__discard__", {
+            faceUpCard: topCard,
+            label: String(e?.action ?? "play").toLowerCase() === "respond" ? "Respond" : "Discard",
+            delayMs: targetId ? 520 : 240,
+          });
+        }
+
+        if (ck === "gatling") onAddFx("gatling", { fromId });
+        else if (ck === "indians") onAddFx("indians_start", { fromId });
+        else if (ck === "beer") onAddFx("beer_glow", { targetId: fromId });
+      }
+
+      if (t === "card_discarded") {
+        const discardedCard = eventCardLike(e?.card ?? e);
+        if (discardedCard) pushDiscardCard(discardedCard);
+      }
+
+      if (t === "general_store_pick") {
+        const pickerId = String(e?.pickerId ?? "");
+        const pickedCard = eventCardLike(e?.card ?? e);
+        if (pickerId) {
+          pushDrawMotion("__deck__", pickerId, {
+            faceUpCard: pickedCard ?? undefined,
+            label: "Store",
+          });
+        }
+      }
+
+      if (t === "turn_started") {
+        const pid = String(e?.turnPlayerId ?? "");
+        const turnPlayer = (Array.isArray(players) ? players : []).find(
+          (p: any) => String(p?.id ?? "") === pid
+        );
+        const turnChar = String((turnPlayer as any)?.playcharacter ?? "").toLowerCase();
+        const hasCustomDrawFlow =
+          turnChar === "kit_carlson" ||
+          turnChar === "jesse_jones" ||
+          turnChar === "pedro_ramirez" ||
+          turnChar === "black_jack";
+
+        if (pid && turnChar === "black_jack") {
+          pushDrawMotion("__deck__", pid, {
+            delayMs: 90,
+            label: "Draw 1",
+          });
+        }
+
+        if (pid && !hasCustomDrawFlow) {
+          pushDrawMotion("__deck__", pid, { delayMs: 70 });
+          pushDrawMotion("__deck__", pid, { delayMs: 250 });
+        }
+      }
+
+      if (t === "passive_triggered") {
+        const kind = String(e?.kind ?? "").toLowerCase();
+        const toId = firstString(e, ["playerId", "targetId", "victimId"]);
+
+        if (kind.includes("gringo") && toId) {
+          const fromId =
+            firstString(e, ["attackerId", "fromId", "sourcePlayerId", "fromPlayerId"]) || "__deck__";
+          pushDrawMotion(fromId, toId, { label: "El Gringo" });
+        } else if (kind.includes("blackjack_reveal") && toId) {
+          const shown = eventCardLike(e?.revealed ?? e);
+          const badge = shortCardBadge(shown);
+          pushDrawMotion("__deck__", toId, {
+            faceUpCard: shown ?? undefined,
+            delayMs: 560,
+            label: badge ? `2nd Card ${badge}` : "2nd Card",
+          });
+        } else if (kind.includes("blackjack_bonus_draw") && toId) {
+          pushDrawMotion("__deck__", toId, {
+            delayMs: 1120,
+            label: "3rd Card",
+          });
+        } else if ((kind.includes("bart") || kind.includes("suzy") || kind.includes("black")) && toId) {
+          pushDrawMotion("__deck__", toId, { label: passiveLabel(kind) });
+        }
+      }
+
+      if (t === "action_resolved") {
+        const k = String(e?.kind ?? "").toLowerCase();
+        const targetId = e?.targetId ? String(e.targetId) : undefined;
+        const fromId = String(e?.attackerId ?? e?.playerId ?? "");
+
+        const nextDiscard = eventCardLike(
+          e?.discardTop ?? e?.topDiscard ?? e?.lastDiscard ? e : null
+        );
+        if (nextDiscard && shouldShowDiscardTopCard(nextDiscard)) {
+          const stack = [...discardStackRef.current];
+          if (stack.length) stack[stack.length - 1] = nextDiscard;
+          else stack.push(nextDiscard);
+          discardStackRef.current = stack;
+          syncDiscardTopFromStack();
+        }
+
+        if ((k === "bang_hit" || k === "bang_timeout_hit") && targetId) {
+          onAddFx("bang_hit", { fromId, targetId });
+        }
+
+        if ((k === "indians_hit" || k === "gatling_hit") && targetId) {
+          onAddFx("bang_hit", { fromId, targetId });
+        }
+
+        if (k === "duel_timeout_lose" || k === "duel_lose") {
+          const loserId = String(e?.loserId ?? e?.targetId ?? "");
+          if (loserId) onAddFx("bang_hit", { fromId, targetId: loserId });
+        }
+
+        if (k === "discard_limit_done") {
+          const pid = firstString(e, ["playerId", "targetId"]);
+          const discardedCards = Array.isArray((e as any)?.discardedCards) ? (e as any).discardedCards : [];
+          if (pid && discardedCards.length) {
+            discardedCards.forEach((card: any, index: number) => {
+              pushDrawMotion(pid, "__discard__", {
+                faceUpCard: eventCardLike(card) ?? undefined,
+                label: index === 0 ? "Discard" : undefined,
+                delayMs: 80 + index * 130,
+              });
+            });
+          }
+        }
+
+        if (
+          (
+            k === "bang_missed" ||
+            k === "bang_dodged_barrel" ||
+            k === "bang_partial_missed" ||
+            k === "gatling_defended" ||
+            k === "gatling_defended_missed" ||
+            k === "gatling_defended_barrel"
+          ) &&
+          targetId
+        ) {
+          onAddFx("shield", { fromId, targetId });
+        }
+
+        if (k === "beer" || k === "beer_heal" || k === "heal" || k === "sid_heal" || k === "revive_success") {
+          const pid = String(e?.playerId ?? e?.targetId ?? fromId ?? "");
+          if (pid) onAddFx("beer_glow", { targetId: pid });
+        }
+
+        if (k === "saloon") {
+          const everyone = [
+            ...((Array.isArray(players) ? players : []).map((pl: any) => String(pl?.id ?? "")).filter(Boolean)),
+            String((me as any)?.id ?? ""),
+          ];
+          Array.from(new Set(everyone)).forEach((pid) => {
+            if (pid) onAddFx("beer_glow", { targetId: pid });
+          });
+        }
+
+        if (k === "jesse_draw_choice") {
+          const pid = firstString(e, ["playerId", "targetId"]);
+          const sourceId = String(e?.targetId ?? "");
+          const fromTarget = e?.fromTarget === true && !!sourceId;
+
+          if (pid) {
+            pushDrawMotion(fromTarget ? sourceId : "__deck__", pid, {
+              label: fromTarget ? "Jesse" : "Deck",
+            });
+            pushDrawMotion("__deck__", pid, {
+              delayMs: 180,
+              label: fromTarget ? "Deck" : "Draw",
+            });
+          }
+        }
+
+        if (k === "draw_choice_done") {
+          const pid = firstString(e, ["playerId", "targetId"]);
+          if (pid) {
+            pushDrawMotion("__deck__", pid, { delayMs: 70, label: "Kit" });
+            pushDrawMotion("__deck__", pid, { delayMs: 240, label: "Kit" });
+          }
+        }
+
+        if (k.includes("pedro")) {
+          const pid = firstString(e, ["playerId", "targetId"]);
+          const sourceName = String(e?.source ?? e?.drawSource ?? "").toLowerCase();
+          const fromDiscard =
+            e?.fromDiscard === true ||
+            e?.useDiscard === true ||
+            e?.pickedDiscard === true ||
+            sourceName.includes("discard");
+
+          if (pid) {
+            const takenFromDiscard = fromDiscard ? popDiscardCard() : null;
+            pushDrawMotion(fromDiscard ? "__discard__" : "__deck__", pid, {
+              label: "Pedro",
+              faceUpCard: fromDiscard
+                ? eventCardLike(e) ?? takenFromDiscard ?? undefined
+                : undefined,
+            });
+            pushDrawMotion("__deck__", pid, { delayMs: 180, label: "Deck" });
+          }
+        }
+      }
+
+      if (t === "draw_check") {
+        const kind = String(e?.kind ?? "").toLowerCase();
+        const targetId = e?.playerId ? String(e.playerId) : undefined;
+
+        const ok =
+          typeof e?.success === "boolean"
+            ? e.success
+            : typeof e?.freed === "boolean"
+            ? e.freed
+            : typeof e?.exploded === "boolean"
+            ? !e.exploded
+            : !!e?.ok;
+
+        const drawnCards = Array.isArray(e?.drawn) ? e.drawn : [];
+        if (
+          targetId &&
+          (kind === "barrel" || kind === "jail" || kind === "dynamite" || kind === "jourdonnais")
+        ) {
+          setDrawCheckOverlayEvent({
+            ...e,
+            type: "draw_check",
+            drawn: drawnCards,
+          });
+
+          const chosenCard = eventCardLike(e?.chosen ?? e);
+          if (chosenCard) {
+            const badge = shortCardBadge(chosenCard);
+            pushDrawMotion("__deck__", targetId, {
+              faceUpCard: chosenCard,
+              label: badge ? `${kind.toUpperCase()} ${badge}` : kind.toUpperCase(),
+            });
+
+            pushDrawMotion(targetId, "__discard__", {
+              faceUpCard: chosenCard,
+              label: "Discard",
+              delayMs: 2100,
+            });
+          }
+        }
+
+        if (!ok && targetId && kind === "jail") onAddFx("jail_lock", { targetId });
+        if (!ok && targetId && kind === "dynamite") onAddFx("explosion", { targetId });
+      }
+    }
+
+    lastEvtIdRef.current = String(list[list.length - 1]?.id ?? "");
+  }, [events, onAddFx, pushDrawMotion, players, me, syncDiscardTopFromStack]);
+
+  const disconnectedIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of Array.isArray(events) ? events : []) {
+      if (String(e?.type ?? "") === "player_disconnected") {
+        const pid = String((e as any)?.playerId ?? "").trim();
+        if (pid) set.add(pid);
+      }
+    }
+    return set;
+  }, [events]);
+
+  const allPlayers = useMemo(
+    () =>
+      (Array.isArray(players) ? players : []).map((p: any) => ({
+        ...p,
+        disconnected: disconnectedIds.has(String(p?.id ?? "")),
+      })),
+    [players, disconnectedIds]
+  );
+  const alivePlayers = useMemo(() => allPlayers.filter((p: any) => p && p.isAlive !== false), [allPlayers]);
+  const seatOrder = useMemo(() => alivePlayers.map((p: any) => String(p.id)), [alivePlayers]);
+
+  const opponents = useMemo(() => {
+    if (!me) return allPlayers as any[];
+    return allPlayers.filter((p: any) => String(p.id) !== String(me.id));
+  }, [allPlayers, me]);
+
+  const focusedPlayer = useMemo(() => {
+    if (!focusedId) return null;
+    return (allPlayers.find((p: any) => String(p.id) === String(focusedId)) as any) ?? null;
+  }, [allPlayers, focusedId]);
+
+  const distanceById = useMemo(() => {
+    if (!me) return {} as Record<string, number>;
+    const map: Record<string, number> = {};
+    for (const p of opponents) {
+      if ((p as any)?.isAlive === false || (p as any)?.disconnected) continue;
+      const base = seatDistance(seatOrder, String(me.id), String(p.id));
+      map[String(p.id)] = effectiveDistance(me, p, base);
+    }
+    return map;
+  }, [me, opponents, seatOrder]);
+
+  const focusedDistance = useMemo(() => {
+    if (!me || !focusedPlayer) return null;
+    if ((focusedPlayer as any)?.isAlive === false || (focusedPlayer as any)?.disconnected) return null;
+    const base = seatDistance(seatOrder, String(me.id), String((focusedPlayer as any).id));
+    return effectiveDistance(me, focusedPlayer, base);
+  }, [me, focusedPlayer, seatOrder]);
+
+  const isMyTurn = !!me && !!turnPlayerId && String(turnPlayerId) === String((me as any).id);
+
+  useEffect(() => {
+    if (isMyTurn) setFocusedId(null);
+  }, [isMyTurn]);
+
+  const selectedCard = useMemo(() => {
+    const hand: any[] = Array.isArray((me as any)?.hand) ? (me as any).hand : [];
+    return hand.find((c) => cardUid(c) === String(selectedCardId ?? "")) ?? null;
+  }, [me, selectedCardId]);
+
+  const selectedCardKey = String((selectedCard as any)?.key ?? (selectedCard as any)?.name ?? "").toLowerCase();
+
+  const meCharForRules = String((me as any)?.playcharacter ?? "").toLowerCase();
+  const isJanetForRules =
+    meCharForRules === "calamity_janet" ||
+    meCharForRules === "calamityjanet" ||
+    meCharForRules === "janet";
+
+  const cardNeedsTarget = useMemo(() => {
+    const k = selectedCardKey;
+    if (!k) return false;
+    if (k === "missed") return isJanetForRules;
+    return ["bang", "duel", "panic", "cat_balou", "catbalou", "jail"].includes(k);
+  }, [selectedCardKey, isJanetForRules]);
+
+  const targeting =
+    !!selectedCardId && !actionRequired && isMyTurn && String(phase ?? "") === "main" && cardNeedsTarget;
+
+  useEffect(() => {
+    if (String(phase ?? "") !== "main" || !!actionRequired) {
+      setSidMode(false);
+      setSidSelectedIds(new Set());
+    }
+  }, [phase, actionRequired]);
+
+  const onPressOpponent = useCallback(
+    (id: string) => {
+      const hit = allPlayers.find((p: any) => String(p?.id ?? "") === String(id));
+      if (targeting) {
+        if (!hit || hit.isAlive === false || (hit as any).disconnected) return;
+        setSelectedTargetId((prev) => (prev === id ? null : id));
+        setFocusedId(id);
+        return;
+      }
+      setFocusedId((prev) => (prev === id ? null : id));
+    },
+    [targeting, allPlayers]
+  );
+
+  const pendingKindNow = String((personalPending as any)?.kind ?? "").toLowerCase();
+  const discardNeed = Number((personalPending as any)?.need ?? 0);
+  const discardMode = pendingKindNow === "discard_to_limit" || pendingKindNow === "discard_limit";
+
+  useEffect(() => {
+    setDiscardSelectedIds(new Set());
+    if (discardMode) {
+      setSelectedCardId(null);
+      setSelectedTargetId(null);
+      setSidMode(false);
+      setSidSelectedIds(new Set());
+      setRespondSelectedIds(new Set());
+    }
+  }, [discardMode]);
+
+  const canEndTurn = !!roomCode && isMyTurn && !actionRequired && !pending && String(phase ?? "") === "main";
+  const overflowDiscardNeed = Math.max(
+    0,
+    Number(Array.isArray((me as any)?.hand) ? (me as any)?.hand.length : 0) - Number((me as any)?.hp ?? 0)
+  );
+
+  const endTurn = useCallback(() => {
+    if (!canEndTurn) return;
+    if (!roomCode) return;
+
+    const sendNow = () => sendWS({ type: "end_turn", roomCode });
+
+    if (overflowDiscardNeed > 0) {
+      Alert.alert(
+        "Discard before turn ends",
+        `Are you sure? Ending your turn will force you to discard ${overflowDiscardNeed} card${overflowDiscardNeed > 1 ? "s" : ""}.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "End Turn", style: "destructive", onPress: sendNow },
+        ]
+      );
+      return;
+    }
+
+    sendNow();
+  }, [roomCode, sendWS, canEndTurn, overflowDiscardNeed]);
+
+  const canPlayNow = !!roomCode && isMyTurn && !actionRequired && !pending && String(phase ?? "") === "main";
+  const missedPlayable = selectedCardKey !== "missed" || isJanetForRules;
+  const playEnabled = canPlayNow && missedPlayable && !!selectedCardId && (!cardNeedsTarget || !!selectedTargetId);
+
+  const playSelected = useCallback(() => {
+    if (!playEnabled) return;
+    if (!roomCode) return;
+    if (!selectedCardId) return;
+
+    if (selectedCardKey === "panic" || selectedCardKey === "cat_balou" || selectedCardKey === "catbalou") {
+      if (!selectedTargetId) return;
+      const t = (players as any[]).find((p: any) => String(p?.id) === String(selectedTargetId));
+
+      setLocalPick({
+        kind: selectedCardKey === "panic" ? "panic" : "cat_balou",
+        cardId: selectedCardId,
+        targetId: selectedTargetId,
+        handCount: Number(t?.handCount ?? 0),
+        equipment: Array.isArray(t?.equipment) ? t.equipment : [],
+      });
+
+      setSelectedCardId(null);
+      setSelectedTargetId(null);
+      return;
+    }
+
+    const payload: any = { type: "play_card", roomCode, cardId: selectedCardId };
+    if (cardNeedsTarget) payload.targetId = selectedTargetId;
+
+    sendWS(payload);
+    setSelectedCardId(null);
+    setSelectedTargetId(null);
+  }, [
+    playEnabled,
+    roomCode,
+    selectedCardId,
+    cardNeedsTarget,
+    selectedTargetId,
+    sendWS,
+    selectedCardKey,
+    players,
+  ]);
+
+  const arKind = String((actionRequired as any)?.kind ?? "").toLowerCase();
+  const pendingKind = String((personalPending as any)?.kind ?? "").toLowerCase();
+  const uiPendingKind = String((uiPending as any)?.kind ?? "").toLowerCase();
+
+  const isBarrelChoicePending =
+    arKind === "choose_barrel" ||
+    pendingKind === "barrel_choice" ||
+    uiPendingKind === "choose_barrel" ||
+    uiPendingKind === "barrel_choice";
+
+  const barrelChoicePending: any = isBarrelChoicePending
+    ? personalPending ?? actionRequired ?? uiPending ?? null
+    : null;
+
+  const barrelChoiceCount = Math.max(
+    0,
+    Number((barrelChoicePending as any)?.barrelChecksRemaining ?? 0)
+  );
+
+  const barrelChoiceToken = useMemo(() => {
+    if (!isBarrelChoicePending || !barrelChoicePending) return "";
+    return [
+      String((barrelChoicePending as any)?.attackerId ?? ""),
+      String((barrelChoicePending as any)?.targetId ?? ""),
+      String((barrelChoicePending as any)?.toPlayerId ?? ""),
+      String((barrelChoicePending as any)?.source ?? ""),
+      String((barrelChoicePending as any)?.requiredMissed ?? ""),
+      String((barrelChoicePending as any)?.missedSoFar ?? ""),
+      String((barrelChoicePending as any)?.barrelChecksRemaining ?? ""),
+      String(pendingEndsAt ?? ""),
+    ].join("|");
+  }, [isBarrelChoicePending, barrelChoicePending, pendingEndsAt]);
+
+  useEffect(() => {
+    setBarrelChoiceBusy(false);
+  }, [barrelChoiceToken]);
+
+  const sendBarrelChoice = useCallback(
+    (useBarrel: boolean) => {
+      if (!roomCode) return;
+      if (!isBarrelChoicePending) return;
+      if (barrelChoiceBusy) return;
+
+      setBarrelChoiceBusy(true);
+      sendWS({ type: "choose_barrel", roomCode, useBarrel });
+    },
+    [roomCode, isBarrelChoicePending, barrelChoiceBusy, sendWS]
+  );
+
+  const generalStoreView = useMemo(() => {
+    const allEvents = Array.isArray(events) ? events : [];
+    const publicPendingActive =
+      uiPendingKind === "general_store" || uiPendingKind === "choose_general_store";
+
+    const playerNameById = (pid: string) => {
+      if (!pid) return "";
+      const hit = (Array.isArray(players) ? players : []).find(
+        (p: any) => String(p?.id ?? "") === String(pid)
+      );
+      if (hit?.name) return String(hit.name);
+      if (String((me as any)?.id ?? "") === pid) return String((me as any)?.name ?? "");
+      return pid;
+    };
+
+    let active = false;
+    let offered: any[] = [];
+    let pickerId = "";
+    let order: string[] = [];
+    let idx = 0;
+    const history: any[] = [];
+
+    for (const evt of allEvents) {
+      const type = String((evt as any)?.type ?? "").toLowerCase();
+
+      if (type === "general_store_open") {
+        active = true;
+        offered = Array.isArray((evt as any)?.offered) ? (evt as any).offered : [];
+        order = Array.isArray((evt as any)?.order)
+          ? (evt as any).order.map((x: any) => String(x ?? ""))
+          : [];
+        idx = Number((evt as any)?.idx ?? 0) || 0;
+        pickerId = String((evt as any)?.pickerId ?? order[idx] ?? "");
+        history.length = 0;
+        continue;
+      }
+
+      if (type === "general_store_update") {
+        active = true;
+        if (Array.isArray((evt as any)?.offered)) offered = (evt as any).offered;
+        if (Array.isArray((evt as any)?.order)) {
+          order = (evt as any).order.map((x: any) => String(x ?? ""));
+        }
+        if (Number.isFinite(Number((evt as any)?.idx))) idx = Number((evt as any).idx);
+        pickerId = String((evt as any)?.pickerId ?? order[idx] ?? pickerId ?? "");
+        continue;
+      }
+
+      if (type === "general_store_pick") {
+        active = true;
+        const pid = String((evt as any)?.pickerId ?? "");
+        const pickedCard = (evt as any)?.card ?? null;
+
+        if (pid && pickedCard) {
+          history.push({
+            id: String((evt as any)?.id ?? `${pid}_${String(pickedCard?.id ?? history.length)}`),
+            pickerId: pid,
+            pickerName: playerNameById(pid),
+            card: pickedCard,
+          });
+        }
+
+        if (Array.isArray((evt as any)?.remaining)) {
+          offered = (evt as any).remaining;
+        }
+
+        const nextPickerId =
+          (evt as any)?.nextPickerId === null
+            ? ""
+            : String((evt as any)?.nextPickerId ?? "");
+
+        if (nextPickerId) {
+          pickerId = nextPickerId;
+        } else if (order.length) {
+          idx += 1;
+          pickerId = String(order[idx] ?? "");
+        } else {
+          pickerId = "";
+        }
+        continue;
+      }
+
+      if (
+        type === "action_resolved" &&
+        String((evt as any)?.kind ?? "").toLowerCase() === "general_store_done"
+      ) {
+        active = false;
+        offered = [];
+        pickerId = "";
+      }
+    }
+
+    if (publicPendingActive) {
+      active = true;
+      const pendingCards =
+        (uiPending as any)?.cards ??
+        (uiPending as any)?.offered ??
+        (uiPending as any)?.pending?.cards ??
+        (uiPending as any)?.pending?.offered ??
+        offered;
+      offered = Array.isArray(pendingCards) ? pendingCards : offered;
+
+      const pendingPickerId = String(
+        (uiPending as any)?.pickerId ??
+          (uiPending as any)?.pending?.pickerId ??
+          (uiPending as any)?.order?.[(uiPending as any)?.idx ?? 0] ??
+          pickerId
+      );
+      if (pendingPickerId) pickerId = pendingPickerId;
+    }
+
+    return {
+      active: !!active && (!!offered.length || !!pickerId || history.length > 0),
+      offered,
+      pickerId,
+      pickerName: playerNameById(pickerId),
+      history: history.slice(-8),
+    };
+  }, [events, uiPending, uiPendingKind, players, me]);
+
+  const isGeneralStorePending = generalStoreView.active;
+  const generalStoreCards = generalStoreView.offered;
+  const generalStorePickerId = generalStoreView.pickerId;
+  const generalStorePickerName = generalStoreView.pickerName;
+  const generalStorePickHistory = generalStoreView.history;
+
+  const isGeneralStorePicker =
+    isGeneralStorePending &&
+    !!generalStorePickerId &&
+    !!me &&
+    generalStorePickerId === String((me as any)?.id ?? "");
+
+  useEffect(() => {
+    if (!isGeneralStorePending) {
+      setSelectedStoreCardId(null);
+      return;
+    }
+
+    if (
+      selectedStoreCardId &&
+      !generalStoreCards.some(
+        (c: any) => String(c?.id ?? c?._id ?? c?.cardId ?? "") === String(selectedStoreCardId)
+      )
+    ) {
+      setSelectedStoreCardId(null);
+    }
+  }, [isGeneralStorePending, generalStoreCards, selectedStoreCardId, generalStorePickerId]);
+
+  const isBangPendingLike =
+    arKind === "respond_to_bang" ||
+    pendingKind === "bang" ||
+    pendingKind === "need_missed" ||
+    pendingKind === "respond_missed" ||
+    pendingKind === "bang_missed" ||
+    pendingKind === "need_missed_for_bang";
+
+  const isDuelPendingLike =
+    arKind === "respond_to_duel" ||
+    pendingKind === "duel" ||
+    pendingKind === "duel_response" ||
+    pendingKind === "duel_missed" ||
+    pendingKind === "need_missed_duel";
+
+  const isIndiansPendingLike = arKind === "respond_to_indians" || pendingKind === "indians";
+  const isGatlingPendingLike = arKind === "respond_to_gatling" || pendingKind === "gatling";
+  const isRevivePendingLike = arKind === "respond_to_revive" || pendingKind === "revive";
+
+  const respondMode =
+    !!personalPending &&
+    !isBarrelChoicePending &&
+    (isBangPendingLike ||
+      isDuelPendingLike ||
+      isIndiansPendingLike ||
+      isGatlingPendingLike ||
+      isRevivePendingLike);
+
+  const meChar = String((me as any)?.playcharacter ?? "").toLowerCase();
+  const isJanet =
+    meChar === "calamity_janet" ||
+    meChar === "calamityjanet" ||
+    meChar === "janet";
+
+  const respondNeed = useMemo<"bang" | "missed" | "beer" | null>(() => {
+    if (!respondMode) return null;
+    if (isRevivePendingLike) return "beer";
+    if (isIndiansPendingLike || isDuelPendingLike) return "bang";
+    return "missed";
+  }, [respondMode, isRevivePendingLike, isIndiansPendingLike, isDuelPendingLike]);
+
+  const respondRequired = useMemo(
+    () => Number((personalPending as any)?.requiredMissed ?? 1),
+    [personalPending]
+  );
+  const respondDone = useMemo(
+    () => Number((personalPending as any)?.missedSoFar ?? 0),
+    [personalPending]
+  );
+  const respondRemaining = useMemo(
+    () => Math.max(0, respondRequired - respondDone),
+    [respondRequired, respondDone]
+  );
+
+  const respondMultiMissedMode =
+    respondMode && respondNeed === "missed" && respondRemaining > 1;
+
+  const respondAllowedKeys = useMemo(() => {
+    if (!respondMode || !respondNeed) return undefined;
+
+    if (respondNeed === "bang") {
+      return isJanet ? ["bang", "missed"] : ["bang"];
+    }
+
+    if (respondNeed === "beer") {
+      return ["beer"];
+    }
+
+    return isJanet ? ["missed", "bang"] : ["missed"];
+  }, [respondMode, respondNeed, isJanet]);
+
+  useEffect(() => {
+    if (!respondMode || !respondMultiMissedMode) {
+      setRespondSelectedIds(new Set());
+      return;
+    }
+
+    const handIds = new Set(
+      (Array.isArray((me as any)?.hand) ? (me as any).hand : []).map((c: any) => String(cardUid(c)))
     );
-  }
 
-  /** ============ RENDER ============ */
+    setRespondSelectedIds((prev) => {
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (handIds.has(id)) next.add(id);
+      }
+      return next;
+    });
+
+    setSelectedCardId(null);
+    setSelectedTargetId(null);
+  }, [respondMode, respondMultiMissedMode, me]);
+
+  const onPressCard = useCallback(
+    (c: Card) => {
+      const id = cardUid(c);
+
+      if (discardMode) {
+        setDiscardSelectedIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+        });
+        return;
+      }
+
+      if (sidMode) {
+        setSidSelectedIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+        });
+        return;
+      }
+
+      if (respondMultiMissedMode) {
+        const key = String((c as any)?.key ?? (c as any)?.name ?? "").toLowerCase();
+        const allowed =
+          respondNeed === "missed"
+            ? isJanet
+              ? key === "missed" || key === "bang"
+              : key === "missed"
+            : true;
+
+        if (!allowed) return;
+
+        setRespondSelectedIds((prev) => {
+          const next = new Set(prev);
+
+          if (next.has(id)) {
+            next.delete(id);
+            return next;
+          }
+
+          if (next.size >= respondRemaining) {
+            return prev;
+          }
+
+          next.add(id);
+          return next;
+        });
+        return;
+      }
+
+      setSelectedCardId((prev) => (prev === id ? null : id));
+      setSelectedTargetId(null);
+      onAddFx("duel_pulse_end");
+    },
+    [discardMode, sidMode, respondMultiMissedMode, respondNeed, isJanet, respondRemaining, onAddFx]
+  );
+
+  const respondUseSelected = useCallback(() => {
+    if (!respondMode) return;
+    if (!roomCode) return;
+
+    if (respondMultiMissedMode) {
+      const ids = Array.from(respondSelectedIds);
+      if (ids.length !== respondRemaining) return;
+
+      sendWS({ type: "respond", roomCode, cardIds: ids });
+      setRespondSelectedIds(new Set());
+      setSelectedCardId(null);
+      return;
+    }
+
+    if (!selectedCardId) return;
+
+    sendWS({ type: "respond", roomCode, cardId: selectedCardId });
+    setSelectedCardId(null);
+  }, [respondMode, roomCode, respondMultiMissedMode, respondSelectedIds, respondRemaining, selectedCardId, sendWS]);
+
+  const respondTakeHit = useCallback(() => {
+    if (!respondMode) return;
+    if (!roomCode) return;
+
+    sendWS({ type: "respond", roomCode });
+    setSelectedCardId(null);
+    setRespondSelectedIds(new Set());
+  }, [respondMode, roomCode, sendWS]);
+
+  const handMode = (respondMode ? "respond" : "play") as "play" | "respond";
+  const handAllowedKeys = respondMode ? respondAllowedKeys : undefined;
+  const handPlayEnabled = respondMode
+    ? respondMultiMissedMode
+      ? respondSelectedIds.size === respondRemaining
+      : !!selectedCardId
+    : playEnabled;
+  const handOnPlay = respondMode ? respondUseSelected : playSelected;
+  const canTakeHitDuringResponse =
+    !respondMode ||
+    respondNeed !== "missed" ||
+    respondRequired <= 1 ||
+    respondDone <= 0 ||
+    respondRemaining <= 0;
+  const handOnTakeHit = respondMode && canTakeHitDuringResponse ? respondTakeHit : undefined;
+
+  useEffect(() => {
+    if (!respondMode || !isRevivePendingLike) {
+      reviveAutoPassRef.current = "";
+      return;
+    }
+
+    const token = [
+      String((personalPending as any)?.playerId ?? ""),
+      String((personalPending as any)?.attackerId ?? ""),
+      String(pendingEndsAt ?? ""),
+    ].join("|");
+
+    if (reviveAutoPassRef.current === token) return;
+    reviveAutoPassRef.current = token;
+    setSelectedCardId(null);
+  }, [respondMode, isRevivePendingLike, personalPending, pendingEndsAt]);
+
+  const handMessages = useMemo(() => {
+    if (!respondMode || !respondNeed) return undefined;
+
+    if (respondNeed === "missed" && respondRequired > 1) {
+      return [
+        `⚠️ ${respondRemaining} of ${respondRequired} MISSED still needed`,
+        isJanet
+          ? "One response is not enough — play MISSED or BANG, then repeat until the count is done."
+          : "One response is not enough — play MISSED, then repeat until the count is done.",
+      ];
+    }
+
+    if (respondNeed === "bang") {
+      return [isJanet ? "Respond now with BANG or MISSED (Calamity Janet)." : "Respond now with BANG."];
+    }
+
+    if (respondNeed === "beer") {
+      return ["You are dying — play Beer now or press TAKE HIT."];
+    }
+
+    return [isJanet ? "Respond now with MISSED or BANG (Calamity Janet)." : "Respond now with MISSED."];
+  }, [respondMode, respondNeed, respondRequired, respondRemaining, isJanet]);
+
+  const discardPlayEnabled =
+    discardMode && discardNeed > 0 && discardSelectedIds.size === discardNeed;
+
+  const discardSend = useCallback(() => {
+    if (!discardPlayEnabled) return;
+    if (!roomCode) return;
+
+    const selectedIds = Array.from(discardSelectedIds);
+    const handCards = Array.isArray((me as any)?.hand) ? (me as any).hand : [];
+    const myId = String((me as any)?.id ?? "");
+
+    if (myId) {
+      selectedIds.forEach((id, index) => {
+        const card = handCards.find((c: any) => String(cardUid(c)) === String(id));
+        pushDrawMotion(myId, "__discard__", {
+          faceUpCard: card ?? undefined,
+          label: "Discard",
+          delayMs: index * 120,
+        });
+      });
+    }
+
+    sendWS({
+      type: "discard_to_limit",
+      roomCode,
+      cardIds: selectedIds,
+    });
+
+    setDiscardSelectedIds(new Set());
+  }, [discardPlayEnabled, roomCode, sendWS, discardSelectedIds, me, pushDrawMotion]);
+
+  const handPlayLabel = useMemo(() => {
+    if (!respondMode) return "PLAY";
+    if (respondNeed === "missed" && respondRequired > 1) {
+      if (respondMultiMissedMode) {
+        return `MISS ${respondSelectedIds.size}/${respondRemaining}`;
+      }
+      return `MISS ${respondRemaining}/${respondRequired}`;
+    }
+    if (respondNeed === "bang") return "PLAY BANG";
+    if (respondNeed === "beer") return "PLAY BEER";
+    return "PLAY MISS";
+  }, [respondMode, respondNeed, respondRequired, respondRemaining, respondMultiMissedMode, respondSelectedIds]);
+
+  const finalHandOnPlay = discardMode ? discardSend : handOnPlay;
+  const finalHandPlayEnabled = discardMode ? discardPlayEnabled : handPlayEnabled;
+  const finalHandPlayLabel =
+    discardMode ? `DISCARD ${discardSelectedIds.size}/${discardNeed}` : handPlayLabel;
+  const finalHandMessages = discardMode
+    ? [`Discard ${discardNeed} card(s) to end your turn.`]
+    : handMessages;
+
+  const finalMultiSelected =
+    discardMode
+      ? discardSelectedIds
+      : sidMode
+      ? sidSelectedIds
+      : respondMultiMissedMode
+      ? respondSelectedIds
+      : undefined;
+
+  const overlayPending = useMemo(() => {
+    const k = String((uiPending as any)?.kind ?? "").toLowerCase();
+    if (
+      k === "panic" ||
+      k === "play_panic" ||
+      k === "panic_choose" ||
+      k === "choose_panic" ||
+      k === "panic_target_choose" ||
+      k === "action_panic" ||
+      k === "cat_balou" ||
+      k === "catbalou" ||
+      k === "play_cat_balou" ||
+      k === "cat_balou_choose" ||
+      k === "choose_cat_balou" ||
+      k === "action_cat_balou"
+    ) {
+      return uiPending;
+    }
+    return null;
+  }, [uiPending]);
+
+  const onSendFromPanel = useCallback(
+    (payload: any) => {
+      if (!roomCode) return;
+      if (!payload || typeof payload !== "object") return;
+
+      const hasType = typeof (payload as any).type === "string" && (payload as any).type.length > 0;
+      const outgoingType = hasType ? String((payload as any).type ?? "") : RESOLVE_ACTION_TYPE;
+
+      if (abilityPendingToken) {
+        trackedAbilityTokenRef.current = abilityPendingToken;
+      }
+
+      if (hasType) {
+        sendWS({ ...(payload as any), roomCode });
+      } else {
+        sendWS({ type: RESOLVE_ACTION_TYPE, roomCode, ...(payload as any) });
+      }
+
+      if (
+        outgoingType === "choose_draw" ||
+        outgoingType === "choose_jesse_target" ||
+        outgoingType === "choose_pedro_source" ||
+        outgoingType === "choose_lucky_draw" ||
+        outgoingType === SID_HEAL_TYPE
+      ) {
+        if (autoAbilityCharacter) {
+          return;
+        }
+      }
+    },
+    [roomCode, sendWS, abilityPendingToken, autoAbilityCharacter]
+  );
+
+  const onToggleAbility = useCallback(() => {
+    setAbilityOpen((prev) => {
+      const next = !prev;
+      if (next && abilityPendingToken) {
+        trackedAbilityTokenRef.current = abilityPendingToken;
+      }
+      if (!next && autoAbilityCharacter && abilityPendingToken) {
+        return true;
+      }
+      return next;
+    });
+  }, [abilityPendingToken, autoAbilityCharacter]);
+
+  const clearFocus = useCallback(() => setFocusedId(null), []);
+
+  const responseBanner = useMemo(() => {
+    if (isBarrelChoicePending) {
+      return {
+        text: "Do you want to use Barrel / Jourdonnais against Bang!?",
+        sub:
+          barrelChoiceCount > 1
+            ? `${barrelChoiceCount} draw chances are available. Tap USE BARREL to make a draw check, or SKIP BARREL to answer normally.`
+            : "Tap USE BARREL to make a draw check, or SKIP BARREL to answer normally.",
+      };
+    }
+
+    if (respondMode) {
+      if (isRevivePendingLike) {
+        return {
+          text: "Use Beer now to survive.",
+          sub: "Choose Beer and press Play. If not, press TAKE HIT.",
+        };
+      }
+
+      const req = respondRequired;
+      const remaining = respondRemaining;
+      const what = isIndiansPendingLike
+        ? "Indians"
+        : isDuelPendingLike
+        ? "Duel"
+        : isGatlingPendingLike
+        ? "Gatling"
+        : "Bang!";
+
+      if (respondNeed === "bang") {
+        return {
+          text: isJanet ? `Respond to ${what} with BANG or MISSED.` : `Respond to ${what} with BANG.`,
+          sub: isJanet
+            ? "Pick BANG or MISSED, then press Play. Or press TAKE HIT before you start defending."
+            : "Pick BANG, then press Play. Or press TAKE HIT before you start defending.",
+        };
+      }
+
+      if (req > 1) {
+        return {
+          text: isJanet
+            ? `${what}: ${remaining}/${req} MISSED still needed (or BANG as Janet).`
+            : `${what}: ${remaining}/${req} MISSED still needed.`,
+          sub: isJanet
+            ? "One response is not enough. Once you start defending, finish the remaining MISSED count."
+            : "One response is not enough. Once you start defending, finish the remaining MISSED count.",
+        };
+      }
+
+      return {
+        text: isJanet ? `Respond to ${what} with MISSED or BANG.` : `Respond to ${what} with MISSED.`,
+        sub: isJanet
+          ? "Pick MISSED or BANG, then press Play. Or press TAKE HIT."
+          : "Pick MISSED, then press Play. Or press TAKE HIT.",
+      };
+    }
+
+    if (sidMode) {
+      return {
+        text: "Sid Ketchum: select 2 cards to heal 1 HP.",
+        sub: "Then use the character panel below.",
+      };
+    }
+
+    return null;
+  }, [
+    isBarrelChoicePending,
+    barrelChoiceCount,
+    respondMode,
+    sidMode,
+    isIndiansPendingLike,
+    isDuelPendingLike,
+    isGatlingPendingLike,
+    isRevivePendingLike,
+    respondNeed,
+    respondRequired,
+    respondRemaining,
+    isJanet,
+  ]);
+
   return (
-    <ImageBackground source={require("../../assets/homescreen3.png")} style={{ flex: 1 }} resizeMode="cover">
-      <SafeAreaView style={{ flex: 1 }}>
-        <View style={styles.root}>
-          <View style={styles.overlay} />
+    <SafeAreaView ref={rootRef as any} style={s.root}>
+      <ImageBackground source={GAME_BG} style={s.bg} resizeMode="cover">
+        <View style={s.bgScrim} />
+      </ImageBackground>
 
-          {/* ✅ FLYING CARD ANIMATION (from deck to hand) */}
-          {flyVisible && (
-            <Animated.Image
-              source={CARD_BACK}
-              resizeMode="cover"
-              style={[
-                styles.flyCard,
-                {
-                  opacity: flyA,
-                  transform: [{ translateX: flyX }, { translateY: flyY }, { scale: flyS }],
-                },
-              ]}
-            />
-          )}
+      <TimerBadge
+            phase={phase as any}
+            turnEndsAt={turnEndsAt ?? null}
+            pendingEndsAt={pendingEndsAt ?? null}
+            pendingKind={String((personalPending as any)?.kind ?? (uiPending as any)?.kind ?? (pending as any)?.privateKind ?? (pending as any)?.kind ?? "")}
+          />
+      <EventBanner players={players as any[]} events={events as any} pending={pending as any} />
 
-          {/* ✅ PEEK MODAL */}
-          <Modal visible={peekOpen} transparent animationType="fade" onRequestClose={closePeek}>
-            <View style={styles.peekBackdrop}>
-              <Pressable style={StyleSheet.absoluteFillObject} onPress={closePeek} />
-              <View style={styles.peekCenter}>
-                <View
-                  style={[
-                    styles.peekCardWrap,
-                    {
-                      width: Math.min(width * 0.78, 360),
-                      height: Math.min(width * 0.78 * 1.38, 520),
-                    },
-                  ]}
-                >
-                  {peekSrc ? <Image source={peekSrc} style={styles.peekImg} resizeMode="contain" /> : null}
-                </View>
-                {!!peekTitle && <Text style={styles.peekTitle}>{peekTitle}</Text>}
-                <Text style={styles.peekHint}>Tap outside to close</Text>
-              </View>
+      <FxLayer fx={fx} anchors={anchors} onFxDone={onFxDone} />
+      <DrawMotionLayer items={drawMotions} anchors={anchors} onDone={removeDrawMotion} />
+      <DrawCheckOverlay
+        event={drawCheckOverlayEvent as any}
+        onDone={() => setDrawCheckOverlayEvent(null)}
+      />
+
+      <View style={s.gameBody}>
+        <View style={s.hudTop}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.hudTitle} numberOfLines={1}>
+              Room {roomCode || "—"}
+            </Text>
+            <View style={s.hudMetaRow}>
+              <Text style={s.hudSub} numberOfLines={1}>ROLE: {prettyRole(myRole)}</Text>
             </View>
-          </Modal>
+          </View>
 
-          {/* ✅ SCROLLABLE TOP (عشان ما يختفي اشي تحت) */}
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 10 }}>
-            {/* Top bar + TIMER */}
-            <View style={[styles.topBar, { paddingTop: isSmall ? 8 : 12 }]}>
-              <View style={{ gap: 4 }}>
-                <Text style={styles.topText}>Room: {roomCode || "—"}</Text>
-                <Text style={styles.topText}>
-                  Turn:{" "}
-                  {turnPlayerId === me.id
-                    ? "YOU"
-                    : (players ?? []).find((p: any) => p.id === turnPlayerId)?.name ?? "—"}
-                </Text>
-              </View>
+          <View style={s.hudRight}>
+            {isMyTurn ? (
+              <WoodButton title="End Turn" onPress={endTurn} disabled={!canEndTurn} style={s.topActionBtn} />
+            ) : null}
 
-              <View style={styles.timerBadge}>
-                <Text style={styles.timerLabel}>{timerLabel}</Text>
-                <Text style={styles.timerText}>{formatSeconds(secondsLeft)}</Text>
-              </View>
-            </View>
-
-            {/* Opponents row */}
-            <View style={[styles.opponentsRow, { height: OPP_H + 18 }]}>
-              <Pressable onPress={goPrev} style={[styles.navBtn, { height: OPP_H }]}>
-                <Text style={styles.navBtnText}>‹</Text>
-              </Pressable>
-
-              <FlatList
-                ref={listRef}
-                horizontal
-                data={others}
-                keyExtractor={(p: any) => p.id}
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ paddingHorizontal: 10, gap: GAP }}
-                snapToInterval={OPP_CARD_W + GAP}
-                decelerationRate="fast"
-                renderItem={({ item }: any) => {
-                  const isTurn = item.id === turnPlayerId;
-                  const isSel = item.id === selectedOpponentId;
-
-                  const showRole = item.role === "sheriff";
-                  const roleImg = showRole ? (ROLE_IMAGES as any)[item.role] ?? null : null;
-
-                  const wKey: WeaponKey = (item.weaponKey as WeaponKey) ?? weaponFromEquipment(item.equipment);
-                  const wLabel = WEAPON_LABEL[wKey] ?? "Colt .45";
-                  const wRange = WEAPON_RANGE[wKey] ?? 1;
-
-                  const char = getCharacterSafe(String(item.playcharacter ?? ""));
-
-                  return (
-                    <Pressable
-                      onPress={() => setSelectedOpponentId(isSel ? null : item.id)}
-                      style={[
-                        styles.pCard,
-                        { width: OPP_CARD_W, height: OPP_H },
-                        isTurn && styles.turnGlow,
-                        isSel && styles.selGlow,
-                      ]}
-                    >
-                      <View style={styles.pHead}>
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
-                          {char?.image ? <Image source={char.image} style={styles.avatarCircle} /> : null}
-                          <Text style={styles.pName} numberOfLines={1}>
-                            {item.name}
-                          </Text>
-                        </View>
-
-                        {roleImg ? <Image source={roleImg} style={styles.roleIcon} /> : null}
-                      </View>
-
-                      {item.role === "sheriff" && (
-                        <View style={[styles.badge, { marginTop: 6, alignSelf: "flex-start" }]}>
-                          <Text style={styles.badgeText}>⭐ SHERIFF</Text>
-                        </View>
-                      )}
-
-                      <Text style={styles.pMeta}>
-                        ❤️ {item.hp}/{item.maxHp} • Hand {item.handCount}
-                      </Text>
-
-                      <View style={styles.weaponLine}>
-                        <Text style={styles.weaponLineText}>🔫 {wLabel} ({wRange})</Text>
-                      </View>
-                    </Pressable>
-                  );
-                }}
-                onScrollToIndexFailed={() => {}}
-              />
-
-              <Pressable onPress={goNext} style={[styles.navBtn, { height: OPP_H }]}>
-                <Text style={styles.navBtnText}>›</Text>
-              </Pressable>
-            </View>
-
-            {/* ✅ BOARD */}
-            <View style={styles.boardArea}>
-              <ImageBackground
-                source={WOOD_BOARD}
-                style={[styles.board, { height: BOARD_H }]}
-                imageStyle={styles.boardImg}
-                resizeMode="cover"
-              >
-                <View style={styles.boardShade} />
-
-                {/* Deck/Discard (يمين فوق) */}
-                <View style={styles.pilesRow}>
-                  <Pressable
-                    onPress={() => openPeekByImage(CARD_BACK, "DECK")}
-                    style={styles.pile}
-                  >
-                    <Image source={CARD_BACK} style={styles.pileImg} resizeMode="cover" />
-                    <Text style={styles.pileText}>DECK</Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() => openPeekByImage(CARD_BACK, "DISCARD")}
-                    style={[styles.pile, { opacity: 0.95 }]}
-                  >
-                    <Image source={CARD_BACK} style={[styles.pileImg, { opacity: 0.55 }]} resizeMode="cover" />
-                    <Text style={styles.pileText}>DISCARD</Text>
-                  </Pressable>
-                </View>
-
-                {/* Header: name + hp + role */}
-                <View style={styles.boardHeader}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.boardName}>
-                      {boardIsMe ? `You: ${boardPlayer.name}` : boardPlayer.name}
-                    </Text>
-                    <Text style={styles.boardHp}>
-                      ❤️ {boardPlayer.hp}/{boardPlayer.maxHp}
-                    </Text>
-                  </View>
-
-                  {boardRoleImg ? <Image source={boardRoleImg} style={styles.boardRole} /> : null}
-                </View>
-
-                {/* Cards Row: [Equipment] [Character] [Weapon] */}
-                <View style={styles.boardCardsRow}>
-                  {/* Equipment slot */}
-                  <View style={styles.slotCol}>
-                    <Text style={styles.slotLabel}>EQUIP</Text>
-
-                    {boardBlueCard ? (
-                      <Pressable onPress={() => openPeekByCard(boardBlueCard)} style={styles.slotCard}>
-                        {safeCardImage(boardBlueCard) ? (
-                          <Image source={safeCardImage(boardBlueCard)!} style={styles.slotImg} resizeMode="cover" />
-                        ) : (
-                          <View style={styles.slotFallback}>
-                            <Text style={styles.slotFallbackText}>{cardLabel(boardBlueCard) || "EQUIP"}</Text>
-                          </View>
-                        )}
-                      </Pressable>
-                    ) : (
-                      <View style={[styles.slotCard, styles.slotEmpty]}>
-                        <Text style={styles.emptyText}>EMPTY</Text>
-                      </View>
-                    )}
-                  </View>
-
-                  {/* Character */}
-                  <View style={styles.charCol}>
-                    <Text style={styles.slotLabel}>CHARACTER</Text>
-
-                    <Pressable
-                      onPress={() => {
-                        if (boardChar?.image) openPeekByImage(boardChar.image, String(boardChar?.id ?? "character"));
-                      }}
-                      style={[styles.charCard, { height: isSmall ? 138 : 150, width: isSmall ? 110 : 120 }]}
-                    >
-                      {boardChar?.image ? (
-                        <Image source={boardChar.image} style={styles.charImg} resizeMode="cover" />
-                      ) : (
-                        <View style={styles.slotFallback}>
-                          <Text style={styles.slotFallbackText}>CHAR</Text>
-                        </View>
-                      )}
-                    </Pressable>
-                  </View>
-
-                  {/* Weapon */}
-                  <View style={styles.slotCol}>
-                    <Text style={styles.slotLabel}>WEAPON</Text>
-
-                    {boardWeaponCard ? (
-                      <Pressable onPress={() => openPeekByCard(boardWeaponCard)} style={styles.slotCard}>
-                        {safeCardImage(boardWeaponCard) ? (
-                          <Image source={safeCardImage(boardWeaponCard)!} style={styles.slotImg} resizeMode="cover" />
-                        ) : (
-                          <View style={styles.slotFallback}>
-                            <Text style={styles.slotFallbackText}>{cardLabel(boardWeaponCard) || "WEAPON"}</Text>
-                          </View>
-                        )}
-                      </Pressable>
-                    ) : (
-                      <View style={[styles.slotCard, styles.slotEmpty]}>
-                        <Text style={styles.emptyText}>EMPTY</Text>
-                        <Text style={styles.emptySub}>
-                          {WEAPON_LABEL[boardWeaponKey]
-                            ? `default: ${WEAPON_LABEL[boardWeaponKey]}`
-                            : "no weapon"}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                </View>
-
-                <Text style={styles.boardHint}>Tap any card on the board to zoom</Text>
-              </ImageBackground>
-            </View>
-
-            {/* ✅ PENDING PANEL */}
-            {isWaiting && (
-              <View style={styles.pendingPanel}>
-                <Text style={styles.pendingTitle}>Action required</Text>
-                <Text style={styles.pendingSub} numberOfLines={2}>
-                  {pKind || "waiting…"}
-                </Text>
-
-                {!iAmActor && <Text style={styles.pendingNote}>Waiting for another player…</Text>}
-
-                {/* RESPOND: BANG */}
-                {iAmActor && isRespondBang && (
-                  <>
-                    <Text style={styles.pendingTiny}>
-                      Needed:{" "}
-                      <Text style={{ fontWeight: "900" }}>
-                        {Number(pending?.requiredMissed ?? 1) - Number(pending?.missedSoFar ?? 0)}
-                      </Text>{" "}
-                      MISSED
-                    </Text>
-
-                    <View style={styles.pendingBtnsRow}>
-                      <Pressable
-                        onPress={() => missedCardId && respondWithCard(missedCardId)}
-                        disabled={!missedCardId}
-                        style={[styles.pendingBtn, !missedCardId && { opacity: 0.4 }]}
-                      >
-                        <Text style={styles.pendingBtnText}>
-                          Play{" "}
-                          {isCalamity &&
-                          normCardKey((myHand.find((x: any) => x?.id === missedCardId) as any)?.key) === "bang"
-                            ? "BANG (as MISSED)"
-                            : "MISSED"}
-                        </Text>
-                      </Pressable>
-
-                      <Pressable onPress={respondPass} style={[styles.pendingBtn, styles.pendingDanger]}>
-                        <Text style={styles.pendingBtnText}>Take Hit</Text>
-                      </Pressable>
-                    </View>
-                  </>
-                )}
-
-                {/* RESPOND: INDIANS */}
-                {iAmActor && isRespondIndians && (
-                  <View style={styles.pendingBtnsRow}>
-                    <Pressable
-                      onPress={() => bangCardId && respondWithCard(bangCardId)}
-                      disabled={!bangCardId}
-                      style={[styles.pendingBtn, !bangCardId && { opacity: 0.4 }]}
-                    >
-                      <Text style={styles.pendingBtnText}>
-                        Discard{" "}
-                        {isCalamity &&
-                        normCardKey((myHand.find((x: any) => x?.id === bangCardId) as any)?.key) === "missed"
-                          ? "MISSED (as BANG)"
-                          : "BANG"}
-                      </Text>
-                    </Pressable>
-
-                    <Pressable onPress={respondPass} style={[styles.pendingBtn, styles.pendingDanger]}>
-                      <Text style={styles.pendingBtnText}>Lose 1 HP</Text>
-                    </Pressable>
-                  </View>
-                )}
-
-                {/* RESPOND: GATLING */}
-                {iAmActor && isRespondGatling && (
-                  <View style={styles.pendingBtnsRow}>
-                    <Pressable
-                      onPress={() => missedCardId && respondWithCard(missedCardId)}
-                      disabled={!missedCardId}
-                      style={[styles.pendingBtn, !missedCardId && { opacity: 0.4 }]}
-                    >
-                      <Text style={styles.pendingBtnText}>
-                        Play{" "}
-                        {isCalamity &&
-                        normCardKey((myHand.find((x: any) => x?.id === missedCardId) as any)?.key) === "bang"
-                          ? "BANG (as MISSED)"
-                          : "MISSED"}
-                      </Text>
-                    </Pressable>
-
-                    <Pressable onPress={respondPass} style={[styles.pendingBtn, styles.pendingDanger]}>
-                      <Text style={styles.pendingBtnText}>Lose 1 HP</Text>
-                    </Pressable>
-                  </View>
-                )}
-
-                {/* RESPOND: DUEL */}
-                {iAmActor && isRespondDuel && (
-                  <View style={styles.pendingBtnsRow}>
-                    <Pressable
-                      onPress={() => bangCardId && respondWithCard(bangCardId)}
-                      disabled={!bangCardId}
-                      style={[styles.pendingBtn, !bangCardId && { opacity: 0.4 }]}
-                    >
-                      <Text style={styles.pendingBtnText}>
-                        Play{" "}
-                        {isCalamity &&
-                        normCardKey((myHand.find((x: any) => x?.id === bangCardId) as any)?.key) === "missed"
-                          ? "MISSED (as BANG)"
-                          : "BANG"}
-                      </Text>
-                    </Pressable>
-
-                    <Pressable onPress={respondPass} style={[styles.pendingBtn, styles.pendingDanger]}>
-                      <Text style={styles.pendingBtnText}>Lose 1 HP</Text>
-                    </Pressable>
-                  </View>
-                )}
-
-                {/* CHOOSE_DRAW */}
-                {iAmActor && isChooseDraw && (
-                  <>
-                    <Text style={styles.pendingNote}>
-                      Choose exactly <Text style={{ fontWeight: "900" }}>{chooseDrawPickCount}</Text> cards
-                    </Text>
-
-                    <View style={styles.smallRow}>
-                      {chooseDrawOptions.map((c: any) => {
-                        const id = String(c?.id ?? c);
-                        const picked = multiIds.has(id);
-                        const src = safeCardImage(c);
-                        return (
-                          <Pressable
-                            key={id}
-                            onPress={() => toggleMulti(id, chooseDrawPickCount)}
-                            style={[styles.smallCard, picked && styles.smallCardPicked]}
-                          >
-                            {src ? (
-                              <Image source={src} style={styles.smallCardImg} resizeMode="cover" />
-                            ) : (
-                              <View style={styles.slotFallback}>
-                                <Text style={styles.slotFallbackText}>{cardLabel(c) || "CARD"}</Text>
-                              </View>
-                            )}
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-
-                    <View style={styles.pendingBtnsRow}>
-                      <Pressable
-                        onPress={confirmChooseDraw}
-                        disabled={!chooseDrawCanConfirm}
-                        style={[styles.pendingBtn, !chooseDrawCanConfirm && { opacity: 0.4 }]}
-                      >
-                        <Text style={styles.pendingBtnText}>Confirm</Text>
-                      </Pressable>
-
-                      <Pressable onPress={clearMulti} style={[styles.pendingBtn, styles.pendingNeutral]}>
-                        <Text style={styles.pendingBtnText}>Clear</Text>
-                      </Pressable>
-                    </View>
-                  </>
-                )}
-
-                {/* PEDRO */}
-                {iAmActor && isChoosePedro && (
-                  <View style={styles.pendingBtnsRow}>
-                    <Pressable onPress={() => choosePedro("deck")} style={styles.pendingBtn}>
-                      <Text style={styles.pendingBtnText}>From Deck</Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={() => choosePedro("discard")}
-                      style={[styles.pendingBtn, !canPedroDiscard && { opacity: 0.4 }]}
-                      disabled={!canPedroDiscard}
-                    >
-                      <Text style={styles.pendingBtnText}>From Discard</Text>
-                    </Pressable>
-                  </View>
-                )}
-
-                {/* JESSE */}
-                {iAmActor && isChooseJesse && (
-                  <>
-                    <Text style={styles.pendingNote}>Choose a player (or skip)</Text>
-
-                    <View style={styles.pendingBtnsRow}>
-                      <Pressable onPress={() => chooseJesse(undefined)} style={[styles.pendingBtn, styles.pendingNeutral]}>
-                        <Text style={styles.pendingBtnText}>Skip</Text>
-                      </Pressable>
-
-                      {(eligibleJesseTargets.length ? eligibleJesseTargets : others.map((p: any) => p.id))
-                        .slice(0, 4)
-                        .map((id: string) => {
-                          const p = (players ?? []).find((x: any) => x.id === id);
-                          if (!p) return null;
-                          return (
-                            <Pressable key={id} onPress={() => chooseJesse(id)} style={styles.pendingBtn}>
-                              <Text style={styles.pendingBtnText} numberOfLines={1}>
-                                {p.name}
-                              </Text>
-                            </Pressable>
-                          );
-                        })}
-                    </View>
-
-                    {!!selectedOpponentId && (
-                      <Pressable
-                        onPress={() => chooseJesse(selectedOpponentId)}
-                        style={[styles.pendingBtn, { marginTop: 10 }]}
-                      >
-                        <Text style={styles.pendingBtnText}>
-                          Use selected: {(players ?? []).find((p: any) => p.id === selectedOpponentId)?.name ?? "Player"}
-                        </Text>
-                      </Pressable>
-                    )}
-
-                    <Text style={styles.pendingTiny}>
-                      Tip: Tap a player above to select them, then press “Use selected”.
-                    </Text>
-                  </>
-                )}
-
-                {/* DISCARD TO LIMIT */}
-                {iAmActor && isDiscardToLimit && (
-                  <>
-                    <Text style={styles.pendingNote}>
-                      Discard exactly <Text style={{ fontWeight: "900" }}>{requiredDiscardCount}</Text> cards
-                    </Text>
-                    <View style={styles.pendingBtnsRow}>
-                      <Pressable
-                        onPress={confirmDiscardToLimit}
-                        disabled={!discardCanConfirm}
-                        style={[styles.pendingBtn, !discardCanConfirm && { opacity: 0.4 }]}
-                      >
-                        <Text style={styles.pendingBtnText}>Discard</Text>
-                      </Pressable>
-                      <Pressable onPress={clearMulti} style={[styles.pendingBtn, styles.pendingNeutral]}>
-                        <Text style={styles.pendingBtnText}>Clear</Text>
-                      </Pressable>
-                    </View>
-                  </>
-                )}
-              </View>
-            )}
-          </ScrollView>
-
-          {/* ✅ HAND ثابتة تحت */}
-          <View style={styles.handArea}>
-            <View style={styles.handHeader}>
-              <Text style={styles.handTitle}>Your hand ({myHand.length})</Text>
-
-              <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-                {canOpenSidMode && !isWaiting && (
-                  <Pressable
-                    onPress={() => {
-                      setSidMode((v) => !v);
-                      setSelectedCardId(null);
-                      setMultiIds(new Set());
-                    }}
-                    style={[
-                      styles.endBtn,
-                      { backgroundColor: "rgba(0,200,255,0.18)", borderColor: "rgba(0,200,255,0.35)" },
-                    ]}
-                  >
-                    <Text style={styles.endBtnText}>{sidMode ? "Cancel Heal" : "Sid Heal"}</Text>
-                  </Pressable>
-                )}
-
-                {isMyTurn && phase === "main" && (
-                  <Pressable onPress={endTurn} style={styles.endBtn}>
-                    <Text style={styles.endBtnText}>End Turn</Text>
-                  </Pressable>
-                )}
-              </View>
-            </View>
-
-            {!!selectedCard && !multiMode && (
-              <Text style={styles.selInfo}>
-                Selected: <Text style={{ fontWeight: "900" }}>{String((selectedCard as any).key)}</Text>
-                {needsTarget && !selectedOpponentId ? " • Select a target" : ""}
-                {needsTarget && selectedOpponentId
-                  ? ` • Target: ${(players ?? []).find((p: any) => p.id === selectedOpponentId)?.name ?? "player"}`
-                  : ""}
-              </Text>
-            )}
-
-            {!!multiMode && (
-              <Text style={styles.selInfo}>
-                {sidMode ? (
-                  <>
-                    Sid Heal: select <Text style={{ fontWeight: "900" }}>2</Text> cards ({multiIds.size}/2)
-                  </>
-                ) : isChooseDraw ? (
-                  <>
-                    Choose draw: <Text style={{ fontWeight: "900" }}>{multiIds.size}</Text> / {chooseDrawPickCount}
-                  </>
-                ) : isDiscardToLimit ? (
-                  <>
-                    Discard: <Text style={{ fontWeight: "900" }}>{multiIds.size}</Text> / {requiredDiscardCount}
-                  </>
-                ) : (
-                  <>
-                    Multi-select: <Text style={{ fontWeight: "900" }}>{multiIds.size}</Text>
-                  </>
-                )}
-              </Text>
-            )}
-
-            <FlatList
-              horizontal
-              data={myHand}
-              keyExtractor={(c: any, idx) => String(c?.id ?? idx)}
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ gap: 10, paddingVertical: 10 }}
-              renderItem={({ item }: any) => {
-                const id = String(item?.id ?? "");
-                const selectedSingle = selectedCardId === id;
-                const selectedMulti = multiIds.has(id);
-                const src = safeCardImage(item);
-
-                const maxMulti = sidMode ? 2 : isChooseDraw ? chooseDrawPickCount : isDiscardToLimit ? requiredDiscardCount : 0;
-
-                return (
-                  <Pressable
-                    onPress={() => {
-                      if (multiMode) {
-                        if (!id) return;
-                        toggleMulti(id, maxMulti);
-                        return;
-                      }
-                      setSelectedCardId(selectedSingle ? null : id);
-                    }}
-                    onLongPress={() => openPeekByCard(item)}
-                    delayLongPress={220}
-                    style={[
-                      styles.handCard,
-                      !multiMode && selectedSingle && styles.cardSelected,
-                      multiMode && selectedMulti && styles.cardSelected,
-                    ]}
-                  >
-                    {src ? (
-                      <Image source={src} style={styles.handCardImg} resizeMode="cover" />
-                    ) : (
-                      <View style={styles.slotFallback}>
-                        <Text style={styles.slotFallbackText}>{String(item?.key ?? "CARD")}</Text>
-                      </View>
-                    )}
-
-                    {multiMode && (
-                      <View style={[styles.checkBadge, selectedMulti && styles.checkBadgeOn]}>
-                        <Text style={styles.checkBadgeText}>{selectedMulti ? "✓" : ""}</Text>
-                      </View>
-                    )}
-                  </Pressable>
-                );
-              }}
-            />
-
-            {sidMode && !isWaiting && (
-              <View style={styles.pendingBtnsRow}>
-                <Pressable
-                  onPress={confirmSidHeal}
-                  disabled={!sidCanConfirm}
-                  style={[styles.pendingBtn, !sidCanConfirm && { opacity: 0.4 }]}
-                >
-                  <Text style={styles.pendingBtnText}>Heal (+1)</Text>
-                </Pressable>
-                <Pressable onPress={() => setMultiIds(new Set())} style={[styles.pendingBtn, styles.pendingNeutral]}>
-                  <Text style={styles.pendingBtnText}>Clear</Text>
-                </Pressable>
-              </View>
-            )}
-
-            {phase === "main" && !sidMode && (
-              <Pressable onPress={playSelected} disabled={!canPlaySelected} style={[styles.playBtn, !canPlaySelected && styles.playBtnDisabled]}>
-                <Text style={styles.playBtnText}>Play selected{needsTarget ? " (needs target)" : ""}</Text>
-              </Pressable>
-            )}
-
-            {!!selectedOpponentId && (
-              <Pressable onPress={() => setSelectedOpponentId(null)} style={styles.clearTargetBtn}>
-                <Text style={styles.clearTargetText}>Clear viewed player</Text>
-              </Pressable>
-            )}
-
-            {isWaiting &&
-              iAmActor &&
-              !isRespondBang &&
-              !isRespondIndians &&
-              !isRespondGatling &&
-              !isRespondDuel &&
-              !isChooseDraw &&
-              !isChoosePedro &&
-              !isChooseJesse &&
-              !isDiscardToLimit && (
-                <Text style={styles.waitHint}>
-                  Waiting for an action ({pKind}). If buttons missing, paste msg.pending / action_required payload.
-                </Text>
-              )}
+            <WoodButton title="Disconnect" onPress={confirmDisconnect} style={s.topActionBtn} />
           </View>
         </View>
-      </SafeAreaView>
-    </ImageBackground>
+
+        <OpponentsRow
+          players={opponents as PublicPlayer[]}
+          targeting={targeting}
+          focusedId={focusedId}
+          fx={fx}
+          distanceById={distanceById}
+          turnPlayerId={turnPlayerId}
+          respondingPlayerId={respondingFocus.id || null}
+          respondingLabel={respondingFocus.label || null}
+          onPressPlayer={onPressOpponent}
+          onAnchor={onAnchor}
+          activeTargetId={activeFocus.id || null}
+          activeTargetLabel={activeFocus.label || null}
+        />
+
+        {focusedPlayer ? (
+          <View style={s.focusBackRow}>
+            <WoodButton title="Back" onPress={clearFocus} style={s.focusBackBtn} />
+          </View>
+        ) : null}
+
+        <View style={[s.tableArea, { minHeight: tableH }]}> 
+          <TableCenter
+            me={me as any}
+            focused={focusedPlayer ?? null}
+            fx={fx}
+            distanceToMe={focusedDistance}
+            turnPlayerId={turnPlayerId}
+            discardTopCard={discardTopCard}
+            discardCount={Number.isFinite(discardCount as any) ? discardCount : discardStackRef.current.length}
+            deckCount={deckCount ?? null}
+            onDeckAnchor={(pt) => onAnchor("__deck__", pt)}
+            onDiscardAnchor={(pt) => onAnchor("__discard__", pt)}
+            style={s.tableCenter}
+            abilityControl={
+              !focusedPlayer && !!me ? (
+                <CharacterPanel
+                  me={me as any}
+                  players={players as any}
+                  phase={phase as any}
+                  pending={personalPending as any}
+                  onSend={onSendFromPanel}
+                  sidMode={sidMode}
+                  sidSelectedIds={sidSelectedIds}
+                  onSidToggleMode={() => setSidMode((v) => !v)}
+                  onSidHeal={(cardIds: string[]) => sendWS({ type: SID_HEAL_TYPE, roomCode, cardIds })}
+                  onSidClear={() => {
+                    setSidMode(false);
+                    setSidSelectedIds(new Set());
+                  }}
+                  variant="buttonOnly"
+                  open={abilityOpen}
+                  onToggle={onToggleAbility}
+                />
+              ) : null
+            }
+            highlighted={
+              !!activeFocus.id &&
+              !!me &&
+              activeFocus.id === String((me as any)?.id ?? "") &&
+              !focusedPlayer
+            }
+            highlightLabel={activeFocus.label || undefined}
+          />
+        </View>
+
+        {!focusedPlayer && !!me ? (
+          <CharacterAbilityOverlay
+            open={abilityOpen}
+            title="Character Ability"
+            subtitle={
+              abilityNeedsAttention
+                ? `${prettyCharacterName((me as any)?.playcharacter ?? "")} • READY`
+                : prettyCharacterName((me as any)?.playcharacter ?? "")
+            }
+            onClose={() => {
+              if (autoAbilityCharacter && abilityPendingToken) return;
+              setAbilityOpen(false);
+            }}
+          >
+            <CharacterPanel
+              me={me as any}
+              players={players as any}
+              phase={phase as any}
+              pending={personalPending as any}
+              onSend={onSendFromPanel}
+              sidMode={sidMode}
+              sidSelectedIds={sidSelectedIds}
+              onSidToggleMode={() => setSidMode((v) => !v)}
+              onSidHeal={(cardIds: string[]) => sendWS({ type: SID_HEAL_TYPE, roomCode, cardIds })}
+              onSidClear={() => {
+                setSidMode(false);
+                setSidSelectedIds(new Set());
+              }}
+              variant="panelOnly"
+              open={abilityOpen}
+              onToggle={onToggleAbility}
+            />
+          </CharacterAbilityOverlay>
+        ) : null}
+
+        <Pressable
+          style={s.tableDismissTap}
+          onPress={() => {
+            if (!sidMode) setSelectedCardId(null);
+            setSelectedTargetId(null);
+            setFocusedId(null);
+          }}
+        />
+      </View>
+
+      {isGeneralStorePending ? (
+        <GeneralStorePanel
+          offered={generalStoreCards as any}
+          pickerId={generalStorePickerId || String((me as any)?.id ?? "")}
+          pickerName={generalStorePickerName || undefined}
+          isPicker={isGeneralStorePicker}
+          selectedStoreCardId={selectedStoreCardId}
+          setSelectedStoreCardId={setSelectedStoreCardId}
+          selectedHandCardId={null}
+          onConfirm={(takeId) => {
+            if (!roomCode) return;
+            sendWS({ type: "choose_general_store", roomCode, cardId: takeId });
+            setSelectedStoreCardId(null);
+          }}
+          pickHistory={generalStorePickHistory as any}
+        />
+      ) : null}
+
+      {isBarrelChoicePending ? (
+        <View style={s.barrelDockWrap}>
+          <View style={s.barrelDock}>
+            <WoodButton
+              title={barrelChoiceBusy ? "Sending..." : "Use Barrel"}
+              onPress={() => sendBarrelChoice(true)}
+              disabled={barrelChoiceBusy || !roomCode}
+              style={s.barrelBtn}
+            />
+            <WoodButton
+              title={barrelChoiceBusy ? "Sending..." : "Skip Barrel"}
+              onPress={() => sendBarrelChoice(false)}
+              disabled={barrelChoiceBusy || !roomCode}
+              style={s.barrelBtn}
+            />
+          </View>
+        </View>
+      ) : null}
+
+      {responseBanner ? (
+        <View style={[s.responseDock, respondMode ? s.responseDockDanger : null, isBarrelChoicePending ? s.responseDockBarrel : null]}>
+          <Text style={s.responseDockText}>{responseBanner.text}</Text>
+          {responseBanner.sub ? <Text style={s.responseDockSub}>{responseBanner.sub}</Text> : null}
+        </View>
+      ) : null}
+
+      <Animated.View
+        {...chatPanResponder.panHandlers}
+        style={[
+          s.chatFabWrap,
+          {
+            left: chatFabPos.x,
+            top: chatFabPos.y,
+            right: undefined,
+            bottom: undefined,
+            transform: [
+              {
+                translateY: chatFabFloat.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, -6],
+                }),
+              },
+            ],
+          },
+        ]}
+      >
+        <View style={[s.chatFab, chatOpen ? s.chatFabOpen : null]}>
+          <Text style={s.chatFabText}>{chatOpen ? "CLOSE" : "CHAT"}</Text>
+          <Text style={s.chatFabGrip}>DRAG</Text>
+          {unreadChatCount > 0 ? (
+            <View style={s.chatFabBadge}>
+              <Text style={s.chatFabBadgeText}>{unreadChatCount > 9 ? "9+" : unreadChatCount}</Text>
+            </View>
+          ) : null}
+        </View>
+      </Animated.View>
+
+      <ChatOverlay open={chatOpen} onClose={() => setChatOpen(false)} />
+
+      <HandBar
+        me={me as any}
+        selectedCardId={selectedCardId}
+        onPressCard={onPressCard}
+        onPlay={finalHandOnPlay}
+        onTakeHit={handOnTakeHit}
+        takeHitLabel="TAKE HIT"
+        mode={handMode}
+        allowedKeys={handAllowedKeys}
+        playLabel={finalHandPlayLabel}
+        playEnabled={finalHandPlayEnabled}
+        hint=""
+        messages={finalHandMessages}
+        multiSelectedIds={finalMultiSelected}
+        onMeAnchor={(pt) => {
+          if (!me?.id) return;
+          onAnchor(String((me as any).id), pt);
+        }}
+      />
+
+      <ActionOverlay
+        me={me as any}
+        players={players as any}
+        pending={overlayPending as any}
+        onSend={onSendFromPanel}
+        localPick={localPick as any}
+        onCloseLocalPick={() => setLocalPick(null)}
+        onConfirmLocalPick={(sel) => {
+          if (!roomCode) return;
+          if (!localPick) return;
+
+          const base: any = {
+            type: "play_card",
+            roomCode,
+            cardId: localPick.cardId,
+            targetId: localPick.targetId,
+          };
+
+          if (sel.type === "hand") {
+            sendWS({
+              ...base,
+              pickHand: true,
+              targetZone: "hand",
+              targetHandIndex: sel.index,
+            });
+            return;
+          }
+
+          const eq =
+            (localPick.equipment as any[]).find((c: any) => String(c?.id) === String(sel.cardId)) ??
+            (localPick.equipment as any[]).find((c: any) => String(c?.key ?? c?.name) === String(sel.cardId));
+
+          const realId = String(eq?.id ?? sel.cardId);
+
+          sendWS({
+            ...base,
+            targetCardId: realId,
+            pickHand: false,
+            targetZone: "equipment",
+          });
+        }}
+      />
+
+      {lastPassive ? <PassiveToast lastPassive={lastPassive as any} /> : null}
+
+      <StartInfoOverlay
+        open={showStartInfo}
+        role={myRole}
+        characterKey={myCharacterKey}
+        playerName={String((me as any)?.name ?? "")}
+        onSkip={() => setIntroDismissedRoom(roomCode)}
+      />
+
+      <EndGameOverlay
+        open={!!gameOver}
+        meId={String((me as any)?.id ?? "")}
+        gameOver={gameOver}
+        onBackHome={backHomeFromGameOver}
+      />
+    </SafeAreaView>
   );
 }
 
-/** ================== STYLES ================== */
-
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#000" },
-  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)" },
-
-  flyCard: {
-    position: "absolute",
-    right: 22,
-    top: 150,
-    width: 74,
-    height: 98,
-    borderRadius: 12,
-    overflow: "hidden",
-    zIndex: 999,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.25)",
+const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: "#08090a" },
+  scrollContent: { paddingBottom: 8 },
+  gameBody: {
+    flex: 1,
+    paddingBottom: 2,
+  },
+  focusBackRow: {
+    paddingHorizontal: 12,
+    marginTop: 2,
+    marginBottom: 2,
+    alignItems: "flex-start",
+    zIndex: 3,
+  },
+  focusBackBtn: {
+    minWidth: 96,
+    height: 34,
+  },
+  tableArea: {
+    flexShrink: 1,
+    marginTop: 2,
+    marginBottom: 4,
+  },
+  tableCenter: {
+    flexShrink: 1,
+  },
+  tableDismissTap: {
+    height: 4,
   },
 
-  topBar: {
-    paddingHorizontal: 16,
-    paddingBottom: 10,
+  bg: { ...StyleSheet.absoluteFillObject },
+  bgScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)" },
+
+  hudTop: {
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 6,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
   },
-  topText: { color: "white", fontWeight: "900", fontSize: 16 },
-
-  timerBadge: {
-    minWidth: 110,
-    paddingVertical: 10,
+  hudTitle: { color: "rgba(255,255,255,0.92)", fontWeight: "900", fontSize: 16 },
+  hudSub: { color: "rgba(255,255,255,0.70)", fontSize: 12, marginTop: 2, fontWeight: "800" },
+  hudMetaRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 2 },
+  turnHeroChip: {
     paddingHorizontal: 12,
-    borderRadius: 16,
-    backgroundColor: "rgba(0,0,0,0.50)",
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,216,107,0.96)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.16)",
-    alignItems: "flex-end",
+    borderColor: "rgba(100,58,12,0.36)",
   },
-  timerLabel: { color: "rgba(255,255,255,0.70)", fontSize: 12, fontWeight: "900" },
-  timerText: { color: "white", fontSize: 18, fontWeight: "900", marginTop: 2 },
-
-  opponentsRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 8,
-    paddingBottom: 8,
-  },
-  navBtn: {
-    width: 36,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-  },
-  navBtnText: { color: "white", fontSize: 26, fontWeight: "900" },
-
-  pCard: {
-    borderRadius: 18,
-    padding: 12,
+  turnHeroChipText: { color: "#3C210D", fontSize: 11, fontWeight: "900", letterSpacing: 0.7 },
+  turnWaitChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
     backgroundColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
+    borderColor: "rgba(255,255,255,0.10)",
   },
-  pHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
-  pName: { color: "white", fontWeight: "900", fontSize: 16, flex: 1 },
-  pMeta: { color: "rgba(255,255,255,0.75)", marginTop: 6, fontSize: 12 },
+  turnWaitChipText: { color: "rgba(255,255,255,0.72)", fontSize: 10, fontWeight: "900", letterSpacing: 0.6 },
+  hudRight: { flexDirection: "row", gap: 10, alignItems: "center" },
+  topActionBtn: { minWidth: 104 },
 
-  avatarCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.15)",
-  },
-  roleIcon: { width: 26, height: 26, borderRadius: 6, opacity: 0.95 },
-
-  weaponLine: {
-    marginTop: 10,
-    alignSelf: "flex-start",
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,200,0,0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(255,200,0,0.25)",
-  },
-  weaponLineText: { color: "rgba(255,255,255,0.90)", fontWeight: "900", fontSize: 12 },
-
-  turnGlow: { borderColor: "rgba(255,200,0,0.85)" },
-  selGlow: { borderColor: "rgba(0,200,255,0.85)" },
-
-  badge: {
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,200,0,0.14)",
-    borderWidth: 1,
-    borderColor: "rgba(255,200,0,0.25)",
-  },
-  badgeText: { color: "rgba(255,235,180,0.95)", fontSize: 12, fontWeight: "900" },
-
-  boardArea: { paddingHorizontal: 14, paddingTop: 6, paddingBottom: 8 },
-  board: {
-    borderRadius: 26,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
-    justifyContent: "flex-start",
-  },
-  boardImg: { borderRadius: 26 },
-  boardShade: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.25)" },
-
-  pilesRow: {
-    position: "absolute",
-    right: 10,
-    top: 10,
-    flexDirection: "row",
-    gap: 10,
-    zIndex: 10,
-  },
-  pile: {
-    width: 54,
-    height: 74,
-    borderRadius: 12,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
-    backgroundColor: "rgba(0,0,0,0.25)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  pileImg: { width: "100%", height: "100%" },
-  pileText: {
-    position: "absolute",
-    bottom: 4,
-    fontSize: 10,
-    fontWeight: "900",
-    color: "rgba(255,255,255,0.92)",
-    backgroundColor: "rgba(0,0,0,0.35)",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 999,
-  },
-
-  boardHeader: {
-    paddingHorizontal: 16,
-    paddingTop: 14,
+  playerZone: {
+    paddingHorizontal: 12,
+    paddingTop: 6,
     paddingBottom: 8,
+    gap: 8,
+  },
+  playerInfoBoard: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 16,
+    backgroundColor: "rgba(40,22,6,0.84)",
+    borderWidth: 1,
+    borderColor: "rgba(255,210,120,0.24)",
+  },
+  playerInfoTopRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
-  },
-  boardName: { color: "white", fontWeight: "900", fontSize: 18 },
-  boardHp: { color: "rgba(255,255,255,0.85)", fontWeight: "800", marginTop: 2 },
-  boardRole: { width: 30, height: 30, borderRadius: 8, opacity: 0.95 },
-
-  boardCardsRow: {
-    paddingHorizontal: 14,
-    flexDirection: "row",
-    alignItems: "flex-end",
     justifyContent: "space-between",
     gap: 10,
   },
-
-  slotLabel: {
-    color: "rgba(255,255,255,0.85)",
+  playerIdentity: {
+    flex: 1,
+    minWidth: 0,
+  },
+  playerInfoName: {
+    color: "white",
+    fontSize: 17,
     fontWeight: "900",
-    fontSize: 11,
-    marginBottom: 6,
-    textAlign: "center",
   },
-
-  slotCol: { width: 92, alignItems: "center" },
-  charCol: { flex: 1, alignItems: "center" },
-
-  slotCard: {
-    width: 86,
-    height: 112,
-    borderRadius: 16,
-    overflow: "hidden",
-    backgroundColor: "rgba(0,0,0,0.20)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
-  },
-  slotImg: { width: "100%", height: "100%" },
-
-  slotEmpty: {
-    justifyContent: "center",
-    alignItems: "center",
-    borderStyle: "dashed",
-    borderWidth: 1.5,
-    borderColor: "rgba(255,255,255,0.30)",
-    backgroundColor: "rgba(0,0,0,0.10)",
-  },
-  emptyText: { color: "rgba(255,255,255,0.90)", fontWeight: "900", fontSize: 12 },
-  emptySub: {
-    color: "rgba(255,255,255,0.65)",
+  playerInfoSub: {
+    color: "rgba(255,255,255,0.78)",
+    marginTop: 3,
     fontWeight: "700",
-    fontSize: 10,
-    marginTop: 4,
-    textAlign: "center",
   },
-
-  charCard: {
-    borderRadius: 18,
-    overflow: "hidden",
-    backgroundColor: "rgba(0,0,0,0.20)",
+  playerStatsRow: {
+    flexDirection: "row",
+    gap: 8,
+    alignItems: "center",
+  },
+  playerStatChip: {
+    minWidth: 66,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.22)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.22)",
+    borderColor: "rgba(255,255,255,0.10)",
+    alignItems: "center",
   },
-  charImg: { width: "100%", height: "100%" },
-
-  boardHint: {
-    marginTop: 10,
-    textAlign: "center",
-    color: "rgba(255,255,255,0.75)",
+  playerStatLabel: {
+    color: "#E6C27A",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+  },
+  playerStatValue: {
+    color: "white",
+    fontSize: 15,
+    fontWeight: "900",
+    marginTop: 2,
+  },
+  playerInfoDivider: {
+    height: 1,
+    marginVertical: 10,
+    backgroundColor: "rgba(255,255,255,0.10)",
+  },
+  playerInfoBottomRow: {
+    gap: 8,
+  },
+  playerInfoLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  playerInfoCaption: {
+    width: 58,
+    color: "#E6C27A",
+    fontWeight: "900",
+    fontSize: 12,
+  },
+  playerInfoValue: {
+    flex: 1,
+    color: "rgba(255,255,255,0.88)",
     fontWeight: "800",
     fontSize: 12,
   },
-
-  pendingPanel: {
-    marginHorizontal: 14,
-    marginTop: 6,
-    padding: 12,
-    borderRadius: 18,
-    backgroundColor: "rgba(0,0,0,0.62)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
+  playerGoalText: {
+    marginTop: 10,
+    color: "rgba(255,255,255,0.80)",
+    lineHeight: 18,
   },
-  pendingTitle: { color: "white", fontWeight: "900", fontSize: 14 },
-  pendingSub: { color: "rgba(255,255,255,0.75)", marginTop: 2, fontWeight: "800", fontSize: 12 },
-  pendingNote: { color: "rgba(255,255,255,0.85)", marginTop: 10, fontWeight: "800", fontSize: 12 },
-  pendingTiny: { color: "rgba(255,255,255,0.60)", marginTop: 8, fontWeight: "700", fontSize: 11 },
 
-  pendingBtnsRow: { flexDirection: "row", gap: 10, marginTop: 10, flexWrap: "wrap" },
-  pendingBtn: {
+  btnGhost: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.22)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+  },
+  btnWarn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,120,60,0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(255,120,60,0.30)",
+  },
+  btnText: { color: "rgba(255,255,255,0.92)", fontWeight: "900" },
+
+  endTurnBtn: {
     paddingVertical: 10,
     paddingHorizontal: 14,
-    borderRadius: 14,
-    backgroundColor: "rgba(0,200,255,0.20)",
+    borderRadius: 12,
+    backgroundColor: "rgba(220,40,40,0.95)",
     borderWidth: 1,
-    borderColor: "rgba(0,200,255,0.35)",
+    borderColor: "rgba(0,0,0,0.35)",
   },
-  pendingNeutral: { backgroundColor: "rgba(255,255,255,0.08)", borderColor: "rgba(255,255,255,0.14)" },
-  pendingDanger: { backgroundColor: "rgba(255,80,80,0.22)", borderColor: "rgba(255,80,80,0.35)" },
-  pendingBtnText: { color: "white", fontWeight: "900" },
+  endTurnText: { color: "white", fontWeight: "900" },
 
-  smallRow: { flexDirection: "row", gap: 10, marginTop: 10, flexWrap: "wrap" },
-  smallCard: {
-    width: 72,
-    height: 95,
-    borderRadius: 14,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
-    backgroundColor: "rgba(255,255,255,0.06)",
-  },
-  smallCardPicked: { borderColor: "rgba(0,200,255,0.9)" },
-  smallCardImg: { width: "100%", height: "100%" },
-
-  handArea: {
-    padding: 12,
-    borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(0,0,0,0.55)",
-  },
-  handHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  handTitle: { color: "white", fontWeight: "900", fontSize: 16 },
-  selInfo: { color: "rgba(255,255,255,0.8)", marginTop: 6, fontSize: 12, fontWeight: "700" },
-
-  endBtn: {
-    paddingVertical: 10,
+  characterDock: {
     paddingHorizontal: 12,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,80,80,0.22)",
-    borderWidth: 1,
-    borderColor: "rgba(255,80,80,0.35)",
+    paddingTop: 4,
+    paddingBottom: 6,
   },
-  endBtnText: { color: "white", fontWeight: "900" },
 
-  handCard: {
-    width: 115,
-    height: 150,
-    borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.16)",
-    overflow: "hidden",
+  barrelDockWrap: {
+    marginHorizontal: 12,
+    marginTop: 4,
+    marginBottom: 4,
   },
-  handCardImg: { width: "100%", height: "100%" },
-  cardSelected: { borderColor: "rgba(0,200,255,0.9)" },
-
-  checkBadge: {
-    position: "absolute",
-    right: 8,
-    top: 8,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: "rgba(0,0,0,0.45)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
-    alignItems: "center",
+  barrelDock: {
+    flexDirection: "row",
+    gap: 10,
     justifyContent: "center",
   },
-  checkBadgeOn: { backgroundColor: "rgba(0,200,255,0.25)", borderColor: "rgba(0,200,255,0.55)" },
-  checkBadgeText: { color: "white", fontWeight: "900" },
-
-  playBtn: {
-    marginTop: 10,
-    paddingVertical: 14,
-    borderRadius: 16,
-    alignItems: "center",
-    backgroundColor: "rgba(0,200,255,0.20)",
-    borderWidth: 1,
-    borderColor: "rgba(0,200,255,0.35)",
+  barrelBtn: {
+    flex: 1,
+    maxWidth: 190,
   },
-  playBtnDisabled: { opacity: 0.4 },
-  playBtnText: { color: "white", fontWeight: "900" },
 
-  clearTargetBtn: {
-    marginTop: 8,
-    alignSelf: "center",
-    paddingVertical: 10,
+  responseDock: {
+    marginHorizontal: 12,
+    marginTop: 4,
+    marginBottom: 4,
+    borderRadius: 6,
     paddingHorizontal: 14,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    paddingVertical: 10,
+    backgroundColor: "rgba(10,10,10,0.78)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: "rgba(255,255,255,0.10)",
   },
-  clearTargetText: { color: "rgba(255,255,255,0.85)", fontWeight: "900" },
-
-  waitHint: {
-    marginTop: 10,
-    color: "rgba(255,255,255,0.65)",
+  responseDockDanger: {
+    backgroundColor: "rgba(150,30,30,0.84)",
+    borderColor: "rgba(255,220,200,0.24)",
+  },
+  responseDockBarrel: {
+    marginBottom: 6,
+  },
+  responseDockText: {
+    color: "white",
+    fontWeight: "900",
+    fontSize: 13,
+    textAlign: "center",
+  },
+  responseDockSub: {
+    color: "rgba(255,255,255,0.82)",
     fontWeight: "700",
     fontSize: 11,
     textAlign: "center",
+    marginTop: 4,
   },
 
-  slotFallback: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 8,
-    backgroundColor: "rgba(20,15,10,0.70)",
-  },
-  slotFallbackText: { color: "rgba(255,255,255,0.92)", fontWeight: "900", textAlign: "center", fontSize: 12 },
-
-  peekBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.45)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  peekCenter: { alignItems: "center", paddingHorizontal: 16 },
-  peekCardWrap: {
-    borderRadius: 18,
-    overflow: "hidden",
-    backgroundColor: "rgba(20,15,10,0.95)",
+  turnRibbon: {
+    position: "absolute",
+    top: 56,
+    alignSelf: "center",
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 999,
+    backgroundColor: "rgba(80,42,12,0.94)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.20)",
+    borderColor: "rgba(255,214,138,0.34)",
+    zIndex: 1200,
+    shadowColor: "#000",
+    shadowOpacity: 0.24,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 7,
   },
-  peekImg: { width: "100%", height: "100%" },
-  peekTitle: { marginTop: 10, color: "rgba(255,255,255,0.92)", fontWeight: "900" },
-  peekHint: { marginTop: 6, color: "rgba(255,255,255,0.80)", fontWeight: "800", fontSize: 12 },
+  turnRibbonText: { color: "#FFF3D6", fontWeight: "900", fontSize: 13, letterSpacing: 0.7 },
+
+  chatFabWrap: {
+    position: "absolute",
+    zIndex: 1400,
+  },
+  chatFab: {
+    minWidth: 88,
+    height: 48,
+    borderRadius: 21,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 1,
+    backgroundColor: "rgba(73,38,16,0.96)",
+    borderWidth: 1,
+    borderColor: "rgba(255,214,138,0.35)",
+    shadowColor: "#000",
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 7,
+  },
+  chatFabOpen: {
+    backgroundColor: "rgba(101,49,18,0.98)",
+  },
+  chatFabText: {
+    color: "#FFF3D6",
+    fontWeight: "900",
+    fontSize: 13,
+    letterSpacing: 0.7,
+  },
+  chatFabGrip: {
+    color: "rgba(255,243,214,0.54)",
+    fontWeight: "800",
+    fontSize: 9,
+    letterSpacing: 1.1,
+  },
+  chatFabBadge: {
+    position: "absolute",
+    top: -6,
+    right: -5,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    backgroundColor: "#B3261E",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 1,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.25)",
+  },
+  chatFabBadgeText: {
+    color: "white",
+    fontSize: 10,
+    fontWeight: "900",
+  },
+
+  timerBox: {
+    position: "absolute",
+    top: 52,
+    right: 14,
+    minWidth: 88,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.70)",
+    borderWidth: 1,
+    borderColor: "rgba(255,200,120,0.35)",
+    zIndex: 999,
+    alignItems: "center",
+  },
+  timerBoxAction: {
+    borderColor: "rgba(255,116,92,0.55)",
+    backgroundColor: "rgba(33,10,8,0.78)",
+  },
+  timerKicker: {
+    color: "rgba(255,225,170,0.9)",
+    fontWeight: "900",
+    fontSize: 10,
+    letterSpacing: 1.1,
+    marginBottom: 3,
+  },
+  timerKickerAction: {
+    color: "#ffb6a4",
+  },
+  timerText: { color: "white", fontWeight: "900", fontSize: 16 },
 });

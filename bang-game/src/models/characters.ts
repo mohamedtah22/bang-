@@ -111,6 +111,34 @@ export function getCharacter(id: CharacterId) {
   return CHARACTERS[id];
 }
 
+function normalizeCharacterLookup(id: string) {
+  const s = String(id ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/-/g, "_");
+
+  if (!s) return "";
+  if (s.includes("pedro")) return "pedro_ramirez";
+  if (s.includes("kit")) return "kit_carlson";
+  if (s.includes("lucky")) return "lucky_duke";
+  if (s.includes("bart") || s.includes("cassidy")) return "bart_cassidy";
+  if (s === "sid" || s.startsWith("sid_") || s.endsWith("_sid") || s.includes("sid_ketchum") || s.includes("ketchum")) return "sid_ketchum";
+  if (s.includes("rose")) return "rose_doolan";
+  if (s.includes("jesse")) return "jesse_jones";
+  if (s.includes("janet")) return "calamity_janet";
+  if (s.includes("gringo")) return "el_gringo";
+  if (s.includes("willy")) return "willy_the_kid";
+  if (s.includes("suzy")) return "suzy_lafayette";
+  if (s.includes("paul")) return "paul_regret";
+  if (s.includes("jourd")) return "jourdonnais";
+  if (s.includes("slab")) return "slab_the_killer";
+  if (s.includes("black")) return "black_jack";
+  if (s.includes("vulture")) return "vulture_sam";
+  return s;
+}
+
 export function getCharacterSafe(id: string) {
-  return (CHARACTERS as any)[id] ?? null;
+  const key = normalizeCharacterLookup(id);
+  return (CHARACTERS as any)[key] ?? null;
 }

@@ -6,17 +6,21 @@ import {
   handleCreate,
   handleJoin,
   handleLeave,
+  handleReconnect,
   handleStart,
+  handleChatMessage,
 } from "../controllers/startandjoincontroller";
 
 import {
   handlePlayCard,
   handleRespond,
   handleEndTurn,
-
   handleChooseDraw,
   handleChooseJesseTarget,
   handleChoosePedroSource,
+  handleChooseGeneralStore,
+  handleChooseLuckyDraw,
+  handleChooseBarrel,
   handleSidHeal,
   handleDiscardToLimit,
 } from "../controllers/gameengine";
@@ -34,7 +38,7 @@ function safeSend(ws: any, obj: any) {
 }
 
 function normalizeCode(code: any) {
-  return String(code || "").toUpperCase().trim();
+  return String(code || "").replace(/[\u200E\u200F\u202A-\u202E]/g, "").toUpperCase().trim();
 }
 
 /**
@@ -44,7 +48,7 @@ function normalizeCode(code: any) {
  * - باقي الرسائل: نعم
  */
 function mustHaveRoomCode(type: string) {
-  return !["create", "join", "leave"].includes(type);
+  return !["create", "join", "leave", "reconnect"].includes(type);
 }
 
 /**
@@ -84,60 +88,58 @@ export function routeMessage(ws: any, msg: any) {
       /** ================== lobby ================== */
 
       case "create":
-        // msg: { type:"create", name?:string }
         return handleCreate(ws, msg);
 
       case "join":
-        // msg: { type:"join", roomCode:string, name:string }
         return handleJoin(ws, msg);
 
+      case "reconnect":
+        return handleReconnect(ws, msg);
+
       case "leave":
-        // msg: { type:"leave" }  
         return handleLeave(ws);
 
       case "start":
-        // msg: { type:"start", roomCode:string }
         return handleStart(ws);
+
+      case "chat_message":
+        return handleChatMessage(ws, msg);
 
       /** ================== game engine ================== */
 
       case "play_card":
-        // msg: { type:"play_card", roomCode:string, cardId:string, targetId?:string }
         return handlePlayCard(ws, msg);
 
       case "respond":
-        // msg: { type:"respond", roomCode:string, cardId?:string } (بدون cardId = pass)
         return handleRespond(ws, msg);
 
       case "end_turn":
-        // msg: { type:"end_turn", roomCode:string }
         return handleEndTurn(ws, msg);
 
       /** ================== (choices/abilities) ================== */
 
       case "choose_draw":
-        // Kit Carlson:
-        // msg: { type:"choose_draw", roomCode:string, cardIds:string[] }
         return handleChooseDraw(ws, msg);
 
       case "choose_jesse_target":
-        // Jesse Jones:
-        // msg: { type:"choose_jesse_target", roomCode:string, targetId?:string }  (بدون targetId = skip)
         return handleChooseJesseTarget(ws, msg);
 
       case "choose_pedro_source":
-        // Pedro Ramirez:
-        // msg: { type:"choose_pedro_source", roomCode:string, source:"deck"|"discard" }
         return handleChoosePedroSource(ws, msg);
 
+      case "choose_general_store":
+        return handleChooseGeneralStore(ws, msg);
+
+      case "choose_lucky_draw":
+        return handleChooseLuckyDraw(ws, msg);
+
+      case "choose_barrel":
+        return handleChooseBarrel(ws, msg);
+
       case "sid_heal":
-        // Sid Ketchum ability:
-        // msg: { type:"sid_heal", roomCode:string, cardIds:string[] } (لازم 2)
         return handleSidHeal(ws, msg);
 
       case "discard_to_limit":
-        // end turn hand limit:
-        // msg: { type:"discard_to_limit", roomCode:string, cardIds:string[] }
         return handleDiscardToLimit(ws, msg);
 
       default:
