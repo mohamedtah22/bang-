@@ -1,4 +1,3 @@
-// controllers/room.ts
 import { Player, Role, CharacterId, Card } from "../models/player";
 import { rooms, wsToRoom } from "./state";
 import { startTurn } from "./gameengine";
